@@ -1,0 +1,12 @@
+.py:
+- python		v3.11 or higher
+- argparse		(built-in)
+- readchar		(pip install readchar)
+- yt_dlp		(pip install yt_dlp)
+- os			(built-in)
+- subprocess	(built-in)
+- time			x1 py [python nyt.py -c = 1 second with 10 files]
+
+.exe
+- windows		v10 or higher
+- time			x5 py [./nyt -c = 5 second with 10 files]
