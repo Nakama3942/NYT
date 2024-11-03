@@ -19,19 +19,17 @@ from os import listdir, rename
 from subprocess import run, CalledProcessError
 from requests import get
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-# from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
 
 from yt_dlp import YoutubeDL
 import json
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QSizePolicy, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QMessageBox, QStatusBar
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import Qt, QObject
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 
 # todo
 #  1. Сделать переименование видео после загрузки
-#  2. Добавить комбобокс выбора типа источника (видео или плейлист)
 #  2. Завершить реализацию загрузки плейлистов:
 #  2.1. После каждого видео останавливаться на подтверждение загрузки и указание имени файла
 #  2.2. Добавить настройки, выключающие переименование и добавляющие быструю загрузку
@@ -41,57 +39,61 @@ from PyQt6.QtCore import Qt, QObject
 class Loader(QObject):
 	founded = pyqtSignal(dict)
 	updated = pyqtSignal(int, int, str)
-	finished = pyqtSignal(str)
+	messaged = pyqtSignal(str)
 
 	def __init__(self):
 		super(Loader, self).__init__()
 		self.__executor = ThreadPoolExecutor(max_workers=1)
 
 	def submit_find_video(self, video_url):
-		future = self.__executor.submit(self.find_video, video_url)
+		future = self.__executor.submit(self.__get_video_metadata, video_url)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def find_video(self, video_url):
+	def submit_download_video(self, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio, logging):
+		future = self.__executor.submit(self.__download_video, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio, logging)
+		future.add_done_callback(self.__internal_done_callback)
+
+	def submit_download_audio(self, video_url, quiet):
+		future = self.__executor.submit(self.__download_audio, video_url, quiet)
+		future.add_done_callback(self.__internal_done_callback)
+
+	def submit_extract_audio(self, logging):
+		future = self.__executor.submit(self.__extract_audio, logging)
+		future.add_done_callback(self.__internal_done_callback)
+
+	def __get_video_metadata(self, video_url):
 		ydl_opts = {
-			'quiet': True,  # Отключает лишние сообщения в консоли
+			'quiet': True,			# Отключает лишние сообщения в консоли
 			'no_warnings': True,
 		}
 		with YoutubeDL(ydl_opts) as ydl:
-			self.founded.emit(ydl.extract_info(video_url, download=False))  # Только извлекает информацию
+			self.__found_emitter(ydl.extract_info(video_url, download=False))  # Только извлекает информацию
 
-	def submit_download_video(self, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio, logging):
-		future = self.__executor.submit(self.download_video, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio, logging)
-		future.add_done_callback(self.__internal_done_callback)
-
-	def download_video(self, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio, logging):
+	def __download_video(self, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio, logging):
 		ydl_opts = {
 			"format": f"best[height<={video_format}]",
 			"quiet": not quiet,
 			"output": "%(title)s.%(ext)s",
-			"progress_hooks": [self.update_emitter],
+			"progress_hooks": [self.__update_emitter],
 		}
 		try:
 			with YoutubeDL(ydl_opts) as ydl:
 				ydl.download([video_url])
-				self.finished.emit("[+] Video from playlist has been downloaded")
+				self.__message_emitter("[+] Video from playlist has been downloaded")
 		except Exception as err:
-			self.finished.emit(f"[✗] ERROR: Downloading error {err}")
+			self.__message_emitter(f"[✗] ERROR: Downloading error {err}")
 
 		# rename(video_metadata_title, video_title)
 
 		if run_extract_audio:
 			self.__ffmpeg_extract_audio(video_title, logging)
 
-	def submit_download_audio(self, video_url, quiet):
-		future = self.__executor.submit(self.download_audio, video_url, quiet)
-		future.add_done_callback(self.__internal_done_callback)
-
-	def download_audio(self, video_url, quiet):
+	def __download_audio(self, video_url, quiet):
 		ydl_opts = {
 			"format": "bestaudio/best",
 			"quiet": not quiet,
 			"output": "%(title)s.%(ext)s",
-			"progress_hooks": [self.update_emitter],
+			"progress_hooks": [self.__update_emitter],
 			"extract_audio": True,
 			"audio-format": "mp3",
 			"write-thumbnail": True,
@@ -104,47 +106,45 @@ class Loader(QObject):
 		try:
 			with YoutubeDL(ydl_opts) as ydl:
 				ydl.download([video_url])
-				self.finished.emit("[+] Audio from playlist has been downloaded")
+				self.__message_emitter("[+] Audio from playlist has been downloaded")
 		except Exception as err:
-			self.finished.emit(f"[✗] ERROR: Downloading error {err}")
+			self.__message_emitter(f"[✗] ERROR: Downloading error {err}")
 
-	def submit_extract_audio(self, logging):
-		future = self.__executor.submit(self.download_audio, logging)
-		future.add_done_callback(self.__internal_done_callback)
-
-	def extract_audio(self, logging):
+	def __extract_audio(self, logging):
 		for file in listdir():
 			self.__ffmpeg_extract_audio(file, logging)
+		self.__message_emitter(f"[✓] Extraction complete")
 
 	def __ffmpeg_extract_audio(self, filename, logging):
-		print(1)
-		print(filename)
 		if filename.endswith(".mp4"):
-			print(2)
 			command = [
-				"ffmpeg",  # Путь к ffmpeg (если он не в PATH)
-				"-i", filename,  # Входное видео
-				"-vn",  # Опция для указания, что нужно только аудио
-				"-acodec", "libmp3lame",  # Копирование аудио без перекодирования
-				"-ab", "192k",  # Установка битрейта аудио
-				filename.replace(".mp4", ".mp3")  # Выходное аудио
+				"ffmpeg",							# Путь к ffmpeg (если он не в PATH)
+				"-i", filename,						# Входное видео
+				"-vn",								# Опция для указания, что нужно только аудио
+				"-acodec", "libmp3lame",			# Копирование аудио без перекодирования
+				"-ab", "192k",						# Установка битрейта аудио
+				filename.replace(".mp4", ".mp3")	# Выходное аудио
 			]
-			print(3)
 			try:
 				if logging:
 					run(command, check=True)
 				else:
 					run(command, capture_output=True, check=True)
-				print(4)
-				self.progress_update_signal.emit(f"[✓] File {filename} converted successfully")
+				self.__message_emitter(f"[✓] File {filename} converted successfully")
 			except CalledProcessError as err:
-				self.progress_update_signal.emit(f"[✗] ERROR: File {filename} could not be converted {err}")
+				self.__message_emitter(f"[✗] ERROR: File {filename} could not be converted {err}")
 		else:
-			self.progress_update_signal.emit(f"[-] Ignored the '{filename}'")
+			self.__message_emitter(f"[-] Ignored the '{filename}'")
 
-	def update_emitter(self, emit_value):
-		if emit_value['status'] == 'downloading':
-			self.updated.emit(emit_value['total_bytes'], emit_value['downloaded_bytes'], emit_value['_percent_str'])
+	def __found_emitter(self, data):
+		self.founded.emit(data)
+
+	def __update_emitter(self, updated_data):
+		if updated_data['status'] == 'downloading':
+			self.updated.emit(updated_data['total_bytes'], updated_data['downloaded_bytes'], updated_data['_percent_str'])
+
+	def __message_emitter(self, message):
+		self.messaged.emit(message)
 
 	def __internal_done_callback(self, future):
 		# self.__executor.shutdown(wait=False)
@@ -279,6 +279,7 @@ class NYTDialogWindow(QMainWindow):
 
 		self.download_metadata_butt = QPushButton("Save all metadata (JSON)")
 		self.download_metadata_butt.clicked.connect(self.download_metadata_butt_clicked)
+		self.download_metadata_butt.setVisible(False)
 
 		self.download_video_butt = QPushButton("Download in video format (MP4)")
 		self.download_video_butt.clicked.connect(self.download_video_butt_clicked)
@@ -339,7 +340,7 @@ class NYTDialogWindow(QMainWindow):
 		self.loader = Loader()
 		self.loader.founded.connect(self.loader_founded)
 		self.loader.updated.connect(self.loader_updated)
-		self.loader.finished.connect(self.loader_finished)
+		self.loader.messaged.connect(self.loader_messaged)
 
 	def loader_founded(self, video_metadata):
 		self.video_metadata = video_metadata
@@ -370,7 +371,7 @@ class NYTDialogWindow(QMainWindow):
 		self.download_progress_bar.setValue(current_percent)
 		self.status_bar.showMessage(message)
 
-	def loader_finished(self, message):
+	def loader_messaged(self, message):
 		self.status_bar.showMessage(message)
 
 	def rename_check_box_state_changed(self, state):
@@ -427,7 +428,7 @@ class NYTDialogWindow(QMainWindow):
 		# 		converted_string += char.encode('utf-16-be').decode('utf-8', 'ignore')
 
 		# print(json.loads('{' + self.video_metadata['title'] + '}')['title'])
-		# with open(f"{converted_string}.json", "w", encoding="utf-8") as json_file:
+		# with open(f"{self.video_metadata['title']}.json", "w", encoding="utf-8") as json_file:
 		# 	json.dump(self.video_metadata, json_file, indent=4)
 
 	def download_video_butt_clicked(self):  # download_playlist()
@@ -441,13 +442,13 @@ class NYTDialogWindow(QMainWindow):
 			self.logging_check_box.isChecked()
 		)
 
-	def extract_audio_butt_clicked(self):  # extract_audio
+	def download_audio_butt_clicked(self):  # extract_audio
 		self.loader.submit_download_audio(
 			self.url_line_edit.text(),
 			self.logging_check_box.isChecked()
 		)
 
-	def download_audio_butt_clicked(self):  # download_audio_from_playlist()
+	def extract_audio_butt_clicked(self):  # download_audio_from_playlist()
 		self.loader.submit_extract_audio(
 			self.logging_check_box.isChecked()
 		)
