@@ -15,11 +15,12 @@
 # https://www.youtube.com/playlist?list=PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM
 
 import sys
-from os import listdir, rename
+from os import listdir, getcwd, rename, path
 from subprocess import run, CalledProcessError
 from requests import get
 from datetime import datetime
-import logging as log
+import logging
+import re
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,28 +31,61 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVB
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 
+class DownloadFilter(logging.Filter):
+	def filter(self, record):
+		# Проверяем наличие текста '[download]' в сообщении
+		if any(substring in record.getMessage() for substring in ["[download]", "[ExtractAudio]"]):
+			# Устанавливаем уровень на INFO для таких сообщений
+			record.levelno = logging.INFO
+			record.levelname = 'INFO'
+		return True
+
 # Настройка логирования
-log.basicConfig(
-    level=log.DEBUG,  # Уровень логирования
-    format='%(asctime)s - %(levelname)s - %(message)s',  # Формат логов
-    handlers=[
-        log.StreamHandler(),  # Обработчик для вывода в консоль
-        log.FileHandler('NYT.log', encoding='utf-8')  # Обработчик для записи в файл
-    ]
-)
+
+# Формат логов, который включает имя логгера
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Обработчик для вывода в консоль
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+console_handler.setLevel(logging.DEBUG)
+console_handler.addFilter(DownloadFilter())
+
+# Обработчик для записи в файл
+file_handler = logging.FileHandler('NYT.log', encoding='utf-8')
+file_handler.setFormatter(formatter)
+file_handler.setLevel(logging.INFO)
+file_handler.addFilter(DownloadFilter())
+
+# Настройка основного логгера программы (nyt)
+log = logging.getLogger("nyt")
+log.setLevel(logging.DEBUG)
+log.addHandler(console_handler)
+log.addHandler(file_handler)
+
+# Настройка логгера для yt_dlp
+yt_dlp_log = logging.getLogger("yt_dlp")
+yt_dlp_log.setLevel(logging.DEBUG)
+yt_dlp_log.addHandler(console_handler)
+yt_dlp_log.addHandler(file_handler)
 
 # todo
-#  1. Сделать переименование видео после загрузки
-#  2. Завершить реализацию загрузки плейлистов:
-#  2.1. После каждого видео останавливаться на подтверждение загрузки и указание имени файла
-#  2.2. Добавить настройки, выключающие переименование и добавляющие быструю загрузку
-#  3. Поработать над интерфейсом программы
-#  4. Провести рефакторинг кода
+#  1. Завершить реализацию загрузки плейлистов:
+#  1.1. После каждого видео останавливаться на подтверждение загрузки и указание имени файла
+#  1.2. Добавить настройки, выключающие переименование и добавляющие быструю загрузку
+#  2. Сделать больше логирования
+#  3. Проверить загрузку из других источников (например, твиттера)
+#  4. В настройках логирования добавить выключение логов ffmpeg и реализовать их запись в файл
+#  5. Добавить настройку указания пути к ffmpeg
+#  6. Поработать над интерфейсом программы
+#  7. Провести рефакторинг кода
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
 	updated = pyqtSignal(int, int, str)
 	messaged = pyqtSignal(str)
+	# downloaded = pyqtSignal()
+	extracted = pyqtSignal()
 
 	def __init__(self):
 		super(Loader, self).__init__()
@@ -61,36 +95,37 @@ class Loader(QObject):
 		future = self.__executor.submit(self.__get_video_metadata, video_url)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def submit_download_video(self, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio):
-		future = self.__executor.submit(self.__download_video, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio)
+	def submit_download_video(self, video_url, video_title, video_format):
+		future = self.__executor.submit(self.__download_video, video_url, video_title, video_format)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def submit_download_audio(self, video_url, quiet):
-		future = self.__executor.submit(self.__download_audio, video_url, quiet)
+	def submit_download_audio(self, video_url, video_title):
+		future = self.__executor.submit(self.__download_audio, video_url, video_title)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def submit_extract_specified_audio(self, filenames, logging):
-		future = self.__executor.submit(self.__extract_specified_audio, filenames, logging)
+	def submit_extract_specified_audio(self, filenames, enable_logging):
+		future = self.__executor.submit(self.__extract_specified_audio, filenames, enable_logging)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def submit_extract_all_audio(self, logging):
-		future = self.__executor.submit(self.__extract_all_audio, logging)
+	def submit_extract_all_audio(self, enable_logging):
+		future = self.__executor.submit(self.__extract_all_audio, enable_logging)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def __get_video_metadata(self, video_url):
 		ydl_opts = {
-			'quiet': True,			# Отключает лишние сообщения в консоли
-			'no_warnings': True,
+			"quiet": False,			# Включает логирование
+			"logger": yt_dlp_log
 		}
 		with YoutubeDL(ydl_opts) as ydl:
 			self.__found_emitter(ydl.extract_info(video_url, download=False))  # Только извлекает информацию
 
-	def __download_video(self, video_url, video_title, video_metadata_title, video_format, quiet, run_extract_audio):
+	def __download_video(self, video_url, video_title, video_format):
 		ydl_opts = {
 			"format": f"best[height<={video_format}]",
-			"quiet": not quiet,
-			"output": "%(title)s.%(ext)s",
+			"quiet": False,
+			"outtmpl": video_title,
 			"progress_hooks": [self.__update_emitter],
+			"logger": yt_dlp_log
 		}
 		try:
 			with YoutubeDL(ydl_opts) as ydl:
@@ -99,17 +134,13 @@ class Loader(QObject):
 		except Exception as err:
 			self.__message_emitter(f"[✗] ERROR: Downloading error {err}")
 
-		# rename(video_metadata_title, video_title)
-
-		if run_extract_audio:
-			self.__ffmpeg_extract_audio(video_title, quiet)
-
-	def __download_audio(self, video_url, quiet):
+	def __download_audio(self, video_url, video_title):
 		ydl_opts = {
 			"format": "bestaudio/best",
-			"quiet": not quiet,
-			"output": "%(title)s.%(ext)s",
+			"quiet": False,
+			"outtmpl": video_title,
 			"progress_hooks": [self.__update_emitter],
+			"logger": yt_dlp_log,
 			"extract_audio": True,
 			"audio-format": "mp3",
 			"write-thumbnail": True,
@@ -126,17 +157,17 @@ class Loader(QObject):
 		except Exception as err:
 			self.__message_emitter(f"[✗] ERROR: Downloading error {err}")
 
-	def __extract_specified_audio(self, filenames, logging):
+	def __extract_specified_audio(self, filenames, enable_logging):
 		for file in filenames:
-			self.__ffmpeg_extract_audio(file, logging)
+			self.__ffmpeg_extract_audio(file, enable_logging)
 		self.__message_emitter(f"[✓] Extraction complete")
 
-	def __extract_all_audio(self, logging):
+	def __extract_all_audio(self, enable_logging):
 		for file in listdir():
-			self.__ffmpeg_extract_audio(file, logging)
+			self.__ffmpeg_extract_audio(file, enable_logging)
 		self.__message_emitter(f"[✓] Extraction complete")
 
-	def __ffmpeg_extract_audio(self, filename, logging):
+	def __ffmpeg_extract_audio(self, filename, enable_logging):
 		if filename.endswith(".mp4"):
 			command = [
 				"ffmpeg",							# Путь к ffmpeg (если он не в PATH)
@@ -147,11 +178,12 @@ class Loader(QObject):
 				filename.replace(".mp4", ".mp3")	# Выходное аудио
 			]
 			try:
-				if logging:
+				if enable_logging:
 					run(command, check=True)
 				else:
 					run(command, capture_output=True, check=True)
 				self.__message_emitter(f"[✓] File {filename} converted successfully")
+				self.extracted.emit()
 			except CalledProcessError as err:
 				self.__message_emitter(f"[✗] ERROR: File {filename} could not be converted {err}")
 		else:
@@ -164,7 +196,6 @@ class Loader(QObject):
 	def __update_emitter(self, updated_data):
 		if updated_data['status'] == 'downloading':
 			self.updated.emit(updated_data['total_bytes'], updated_data['downloaded_bytes'], updated_data['_percent_str'])
-			log.debug(f"total_bytes = {updated_data['total_bytes']}, downloaded_bytes = {updated_data['downloaded_bytes']}, _percent_str = {updated_data['_percent_str']}")
 
 	def __message_emitter(self, message):
 		self.messaged.emit(message)
@@ -178,8 +209,13 @@ class VideoFinderWidget(QWidget):
 	def __init__(self):
 		super(VideoFinderWidget, self).__init__()
 
-		self.logging_check_box = QCheckBox("Enable logging?")
-		self.rename_check_box = QCheckBox("Activate the video rename mode?")
+		self.enable_logging_check_box = QGroupBox("Logging")
+		self.enable_yt_dlp_logs_check_box = QCheckBox("Enable YT-DLP logs")
+		self.enable_debug_logs_check_box = QCheckBox("Enable DEBUG logs")
+		self.download_folder_group_box = QGroupBox("Download folder")
+		self.download_folder_label = QLineEdit()
+		self.choose_download_folder_butt = QPushButton("Choose download folder")
+		self.advanced_naming_check_box = QCheckBox("Add the additional data to name video?")
 		self.extract_audio_check_box = QCheckBox("Extract audio before download videos?")
 		self.quality_combo_box = QComboBox()
 		self.source_combo_box = QComboBox()
@@ -191,6 +227,12 @@ class VideoFinderWidget(QWidget):
 		self.date_format_combo_box = QComboBox()
 		self.bottom_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
+		self.enable_logging_check_box.setCheckable(True)
+		self.enable_logging_check_box.setChecked(True)
+		self.enable_yt_dlp_logs_check_box.setChecked(True)
+		self.download_folder_label.setReadOnly(True)
+		self.download_folder_label.setText(getcwd())
+		self.choose_download_folder_butt.setMaximumWidth(150)
 		self.quality_combo_box.addItems(["720", "1080"])
 		self.source_combo_box.addItems(["video", "playlist"])
 		self.source_check_box.setVisible(False)
@@ -200,6 +242,16 @@ class VideoFinderWidget(QWidget):
 		# self.url_line_edit.setText("PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM")
 		self.other_data_display_check_box.setChecked(True)
 		self.date_format_combo_box.addItems(["DD.MM.YYYY", "YYYY.MM.DD", "YYYY-MM-DD"])
+
+		self.logging_layout = QHBoxLayout()
+		self.logging_layout.addWidget(self.enable_yt_dlp_logs_check_box)
+		self.logging_layout.addWidget(self.enable_debug_logs_check_box)
+		self.enable_logging_check_box.setLayout(self.logging_layout)
+
+		self.download_folder_layout = QHBoxLayout()
+		self.download_folder_layout.addWidget(self.download_folder_label)
+		self.download_folder_layout.addWidget(self.choose_download_folder_butt)
+		self.download_folder_group_box.setLayout(self.download_folder_layout)
 
 		self.source_layout = QHBoxLayout()
 		self.source_layout.addWidget(self.source_combo_box)
@@ -214,9 +266,9 @@ class VideoFinderWidget(QWidget):
 		self.upload_date_layout.addWidget(self.date_format_combo_box)
 
 		self.video_finder_layout = QVBoxLayout()
-		self.video_finder_layout.addWidget(self.logging_check_box)
-		self.video_finder_layout.addWidget(self.rename_check_box)
-		self.video_finder_layout.addWidget(self.extract_audio_check_box)
+		self.video_finder_layout.addWidget(self.enable_logging_check_box)
+		self.video_finder_layout.addWidget(self.download_folder_group_box)
+		self.video_finder_layout.addWidget(self.advanced_naming_check_box)
 		self.video_finder_layout.addLayout(self.source_layout)
 		self.video_finder_layout.addLayout(self.url_layout)
 		self.video_finder_layout.addWidget(self.find_video_butt)
@@ -305,8 +357,6 @@ class DownloadButtWidget(QWidget):
 		self.download_video_butt = QPushButton("Download in video format (MP4)")
 		self.download_audio_butt = QPushButton("Download in audio format (MP3)")
 
-		self.download_metadata_butt.setEnabled(False)
-
 		self.download_butt_layout = QVBoxLayout()
 		self.download_butt_layout.addWidget(self.download_metadata_butt)
 		self.download_butt_layout.addWidget(self.download_video_butt)
@@ -320,16 +370,17 @@ class ExtractAudioButtWidget(QWidget):
 	def __init__(self):
 		super(ExtractAudioButtWidget, self).__init__()
 
-		self.extract_specified_audio_butt = QPushButton("Audio from specified .mp4 file")
-		self.extract_all_audio_butt = QPushButton("Audio from all .mp4 files in this directory")
+		self.extract_specified_audio_butt = QPushButton("From specified .mp4 file")
+		self.extract_all_audio_in_specified_dir_butt = QPushButton("From all .mp4 files in specified directory")
+		self.extract_all_audio_butt = QPushButton("From all .mp4 files in this directory")
+		self.extract_progress_bar = QProgressBar()
 		self.extract_bottom_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
-		self.extract_audio_butt_layout = QHBoxLayout()
-		self.extract_audio_butt_layout.addWidget(self.extract_specified_audio_butt)
-		self.extract_audio_butt_layout.addWidget(self.extract_all_audio_butt)
-
 		self.extract_audio_butt_widget_layout = QVBoxLayout()
-		self.extract_audio_butt_widget_layout.addLayout(self.extract_audio_butt_layout)
+		self.extract_audio_butt_widget_layout.addWidget(self.extract_specified_audio_butt)
+		self.extract_audio_butt_widget_layout.addWidget(self.extract_all_audio_in_specified_dir_butt)
+		self.extract_audio_butt_widget_layout.addWidget(self.extract_all_audio_butt)
+		self.extract_audio_butt_widget_layout.addWidget(self.extract_progress_bar)
 		self.extract_audio_butt_widget_layout.addSpacerItem(self.extract_bottom_spacer)
 
 		###
@@ -346,7 +397,10 @@ class NYTDialogWindow(QMainWindow):
 
 		self.video_finder_widget = VideoFinderWidget()
 
-		self.video_finder_widget.rename_check_box.stateChanged.connect(self.rename_check_box_state_changed)
+		self.video_finder_widget.enable_logging_check_box.toggled.connect(self.enable_logging_check_box_toggled)
+		self.video_finder_widget.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logs_check_box_state_changed)
+		self.video_finder_widget.enable_debug_logs_check_box.stateChanged.connect(self.enable_debug_logs_check_box_state_changed)
+		self.video_finder_widget.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
 		self.video_finder_widget.extract_audio_check_box.stateChanged.connect(self.extract_audio_check_box_state_changed)
 		self.video_finder_widget.source_combo_box.currentTextChanged.connect(self.source_combo_box_current_text_changed)
 		self.video_finder_widget.source_check_box.stateChanged.connect(self.source_check_box_state_changed)
@@ -389,12 +443,13 @@ class NYTDialogWindow(QMainWindow):
 		self.extract_audio_butt_widget = ExtractAudioButtWidget()
 
 		self.extract_audio_butt_widget.extract_specified_audio_butt.clicked.connect(self.extract_specified_audio_butt_clicked)
+		self.extract_audio_butt_widget.extract_all_audio_in_specified_dir_butt.clicked.connect(self.extract_all_audio_in_specified_dir_butt_clicked)
 		self.extract_audio_butt_widget.extract_all_audio_butt.clicked.connect(self.extract_all_audio_butt_clicked)
 
 		self.extract_group_box_layout = QVBoxLayout()
 		self.extract_group_box_layout.addWidget(self.extract_audio_butt_widget)
 
-		self.extract_group_box = QGroupBox("Extract")
+		self.extract_group_box = QGroupBox("Extract audio")
 		self.extract_group_box.setFixedWidth(500)
 		self.extract_group_box.setLayout(self.extract_group_box_layout)
 
@@ -429,6 +484,8 @@ class NYTDialogWindow(QMainWindow):
 		self.loader.founded.connect(self.loader_founded)
 		self.loader.updated.connect(self.loader_updated)
 		self.loader.messaged.connect(self.loader_messaged)
+		# self.loader.downloaded.connect(self.loader_downloaded)
+		self.loader.extracted.connect(self.loader_extracted)
 
 	def loader_founded(self, video_metadata):
 		self.download_group_box.setVisible(True)
@@ -451,6 +508,35 @@ class NYTDialogWindow(QMainWindow):
 			"YYYY-MM-DD": udload_video_date.strftime("%Y-%m-%d")
 		}
 
+		def unicode_safe(suspicious_line):
+			# Карта замен символов
+			char_map = {
+				"|": "｜",  # U+FF5C FULLWIDTH VERTICAL LINE
+				":": "꞉",  # U+A789 MODIFIER LETTER COLON
+				"/": "／",  # U+FF0F FULLWIDTH SOLIDUS
+				"\\": "＼",  # U+FF3C FULLWIDTH REVERSE SOLIDUS
+				"?": "？",  # U+FF1F FULLWIDTH QUESTION MARK
+				"*": "＊",  # U+FF0A FULLWIDTH ASTERISK
+				"<": "＜",  # U+FF1C FULLWIDTH LESS-THAN SIGN
+				">": "＞",  # U+FF1E FULLWIDTH GREATER-THAN SIGN
+				'"': "＂",  # U+FF02 FULLWIDTH QUOTATION MARK
+				"+": "＋",  # U+FF0B FULLWIDTH PLUS SIGN
+				"#": "＃",  # U+FF03 FULLWIDTH NUMBER SIGN
+			}
+
+			# Создаём регулярное выражение на основе ключей char_map
+			# Например: r"[|:/\\?*<>\"+#]"
+			pattern = re.compile(f"[{''.join(map(re.escape, char_map.keys()))}]")
+
+			# Проверяем, содержит ли suspicious_line недопустимые символы
+			if pattern.search(suspicious_line):
+				# Если содержит, производим замену
+				for char, replacement in char_map.items():
+					suspicious_line = suspicious_line.replace(char, replacement)
+			return suspicious_line
+
+		video_metadata['title'] = unicode_safe(video_metadata['title'])
+
 		self.video_data_widget.title_label.setText(video_metadata['title'])
 		self.video_data_widget.description_label.setPlainText(video_metadata['description'])
 		self.video_data_widget.duration_string_label.setText(video_metadata['duration_string'])
@@ -469,11 +555,54 @@ class NYTDialogWindow(QMainWindow):
 	def loader_messaged(self, message):
 		self.status_bar.showMessage(message)
 
-	def rename_check_box_state_changed(self, state):
-		if state:
-			self.video_data_widget.title_label.setReadOnly(True)
+	# def loader_downloaded(self, message):
+	# 	pass
+
+	def loader_extracted(self):
+		self.extract_audio_butt_widget.extract_progress_bar.setValue(self.extract_audio_butt_widget.extract_progress_bar.value() + 1)
+
+	def enable_logging_check_box_toggled(self, checked):
+		if checked:
+			# Включаем обработчики
+			log.addHandler(console_handler)
+			log.addHandler(file_handler)
+			yt_dlp_log.addHandler(console_handler)
+			yt_dlp_log.addHandler(file_handler)
+
+			# Разблокируем QCheckBox
+			self.video_finder_widget.enable_debug_logs_check_box.setEnabled(True)
+			self.video_finder_widget.enable_yt_dlp_logs_check_box.setEnabled(True)
 		else:
-			self.video_data_widget.title_label.setReadOnly(False)
+			# Отключаем обработчики
+			log.removeHandler(console_handler)
+			log.removeHandler(file_handler)
+			yt_dlp_log.removeHandler(console_handler)
+			yt_dlp_log.removeHandler(file_handler)
+
+			# Блокируем QCheckBox
+			self.video_finder_widget.enable_debug_logs_check_box.setEnabled(False)
+			self.video_finder_widget.enable_yt_dlp_logs_check_box.setEnabled(False)
+
+	def enable_yt_dlp_logs_check_box_state_changed(self, state):
+		if state:
+			# Включаем логирование yt_dlp
+			yt_dlp_log.addHandler(console_handler)
+			yt_dlp_log.addHandler(file_handler)
+		else:
+			# Отключаем логирование yt_dlp
+			yt_dlp_log.removeHandler(console_handler)
+			yt_dlp_log.removeHandler(file_handler)
+
+	def enable_debug_logs_check_box_state_changed(self, state):
+		if state:
+			# Устанавливаем уровень DEBUG для файлового обработчика
+			file_handler.setLevel(logging.DEBUG)
+		else:
+			# Устанавливаем уровень INFO для файлового обработчика
+			file_handler.setLevel(logging.INFO)
+
+	def choose_download_folder_butt_clicked(self):
+		self.video_finder_widget.download_folder_label.setText(QFileDialog.getExistingDirectory(self, "Выберите директорию с видео"))
 
 	def extract_audio_check_box_state_changed(self, state):
 		if state:
@@ -513,60 +642,59 @@ class NYTDialogWindow(QMainWindow):
 		)
 
 	def download_metadata_butt_clicked(self):
-		pass
-		# print(repr(self.video_metadata['title']))
-		# print(self.video_metadata['title'].encode("utf-16").decode("utf-8"))
-		# title = self.video_metadata['title'].replace('\x00', '').encode('utf-8').decode("utf-8")
-		# repr(self.video_metadata['title'].encode('utf-8').decode('utf-8'))
-		# print(self.video_metadata['title'].encode('utf-16').decode('utf-8', 'ignore'))
-		# print(self.video_metadata['title'])
-		# print(self.video_metadata['title'])
-		# print(self.video_metadata['title'].encode('utf-8').decode('utf-8'))
-		# print(self.video_metadata['title'].encode('unicode_escape').decode('utf-8'))
+		with open(f"{self.video_data_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
+			json.dump(self.video_metadata, json_file, indent=4)
 
-		# title = json.loads(json.dumps(self.video_metadata, ensure_ascii=False))
-		# print(self.video_metadata['title'])
-
-		# converted_string = ""
-		# for char in self.video_metadata['title']:
-		# 	try:
-		# 		converted_string += char.encode('utf-8').decode('utf-8')
-		# 	except UnicodeEncodeError:
-		# 		converted_string += char.encode('utf-16-be').decode('utf-8', 'ignore')
-
-		# print(json.loads('{' + self.video_metadata['title'] + '}')['title'])
-		# with open(f"{self.video_metadata['title']}.json", "w", encoding="utf-8") as json_file:
-		# 	json.dump(self.video_metadata, json_file, indent=4)
-
-	def download_video_butt_clicked(self):  # download_playlist()
+	def download_video_butt_clicked(self):
+		name = f"{self.video_finder_widget.download_folder_label.text()}/"
+		name += f"[%(id)s] - {self.video_data_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_data_widget.title_label.text()}.%(ext)s"
 		self.loader.submit_download_video(
 			self.video_finder_widget.url_line_edit.text(),
-			self.video_data_widget.title_label.text(),
-			f"{self.video_metadata['title']}.mp4",
-			self.video_finder_widget.quality_combo_box.currentText(),
-			self.video_finder_widget.logging_check_box.isChecked(),
-			self.video_finder_widget.extract_audio_check_box.isChecked()
+			name,
+			self.video_finder_widget.quality_combo_box.currentText()
 		)
 
-	def download_audio_butt_clicked(self):  # extract_audio
+	def download_audio_butt_clicked(self):
+		name = f"{self.video_finder_widget.download_folder_label.text()}/"
+		name += f"[%(id)s] - {self.video_data_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_data_widget.title_label.text()}.%(ext)s"
 		self.loader.submit_download_audio(
 			self.video_finder_widget.url_line_edit.text(),
-			self.video_finder_widget.logging_check_box.isChecked()
+			name
 		)
 
 	def extract_specified_audio_butt_clicked(self):
 		# Открытие диалога выбора файла
 		file_names, _ = QFileDialog.getOpenFileNames(self, "Выберите файл", "", "Все файлы (*)")
+		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(sum(1 for f in listdir(path.dirname(file_names[0])) if f.endswith(".mp4")))
+		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
 		if file_names:
 			log.debug(f"Выбранный файл: {file_names}")
 			self.loader.submit_extract_specified_audio(
 				file_names,
-				self.video_finder_widget.logging_check_box.isChecked()
+				self.video_finder_widget.enable_logging_check_box.isChecked()
 			)
 
-	def extract_all_audio_butt_clicked(self):  # download_audio_from_playlist()
+	def extract_all_audio_in_specified_dir_butt_clicked(self):
+		# Открываем диалог для выбора директории
+		selected_dir = QFileDialog.getExistingDirectory(self, "Выберите директорию с видео")
+		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(sum(1 for f in listdir(selected_dir) if f.endswith(".mp4")))
+		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
+		if selected_dir:
+			# Получаем список всех файлов в выбранной директории
+			video_files = listdir(selected_dir)
+			if video_files:
+				self.loader.submit_extract_specified_audio(
+					[path.join(selected_dir, video_file) for video_file in video_files],
+					self.video_finder_widget.enable_logging_check_box.isChecked()
+				)
+			else:
+				log.warning("В выбранной директории нет видеофайлов.")
+
+	def extract_all_audio_butt_clicked(self):
+		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(sum(1 for f in listdir(getcwd()) if f.endswith(".mp4")))
+		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
 		self.loader.submit_extract_all_audio(
-			self.video_finder_widget.logging_check_box.isChecked()
+			self.video_finder_widget.enable_logging_check_box.isChecked()
 		)
 
 if __name__ == '__main__':
