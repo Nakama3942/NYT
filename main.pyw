@@ -79,17 +79,23 @@ yt_dlp_log.addHandler(file_handler)
 #  5. Добавить настройку указания пути к ffmpeg
 #  6. Поработать над интерфейсом программы
 #  7. Провести рефакторинг кода
+#  8. Добавить анимацию ожидания поиска
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
 	updated = pyqtSignal(int, int, str)
 	messaged = pyqtSignal(str)
-	# downloaded = pyqtSignal()
 	extracted = pyqtSignal()
+	start_download = pyqtSignal()
+	finish_download = pyqtSignal()
 
 	def __init__(self):
 		super(Loader, self).__init__()
-		self.__executor = ThreadPoolExecutor(max_workers=1)
+		self.__executor = ThreadPoolExecutor(max_workers=10)
+
+	def submit_find_playlist(self, playlist_url):
+		future = self.__executor.submit(self.__get_playlist_metadata, playlist_url)
+		future.add_done_callback(self.__internal_done_callback)
 
 	def submit_find_video(self, video_url):
 		future = self.__executor.submit(self.__get_video_metadata, video_url)
@@ -111,6 +117,15 @@ class Loader(QObject):
 		future = self.__executor.submit(self.__extract_all_audio, enable_logging)
 		future.add_done_callback(self.__internal_done_callback)
 
+	def __get_playlist_metadata(self, playlist_url):
+		ydl_opts = {
+			"quiet": False,			# Включает логирование
+			"logger": yt_dlp_log,
+			"extract_flat": "in_playlist"
+		}
+		with YoutubeDL(ydl_opts) as ydl:
+			self.__found_emitter(ydl.extract_info(playlist_url, download=False))  # Только извлекает информацию
+
 	def __get_video_metadata(self, video_url):
 		ydl_opts = {
 			"quiet": False,			# Включает логирование
@@ -120,6 +135,7 @@ class Loader(QObject):
 			self.__found_emitter(ydl.extract_info(video_url, download=False))  # Только извлекает информацию
 
 	def __download_video(self, video_url, video_title, video_format):
+		self.start_download.emit()
 		ydl_opts = {
 			"format": f"best[height<={video_format}]",
 			"quiet": False,
@@ -133,8 +149,10 @@ class Loader(QObject):
 				self.__message_emitter("[+] Video from playlist has been downloaded")
 		except Exception as err:
 			self.__message_emitter(f"[✗] ERROR: Downloading error {err}")
+		self.finish_download.emit()
 
 	def __download_audio(self, video_url, video_title):
+		self.start_download.emit()
 		ydl_opts = {
 			"format": "bestaudio/best",
 			"quiet": False,
@@ -156,6 +174,7 @@ class Loader(QObject):
 				self.__message_emitter("[+] Audio from playlist has been downloaded")
 		except Exception as err:
 			self.__message_emitter(f"[✗] ERROR: Downloading error {err}")
+		self.finish_download.emit()
 
 	def __extract_specified_audio(self, filenames, enable_logging):
 		for file in filenames:
@@ -235,11 +254,12 @@ class VideoFinderWidget(QWidget):
 		self.choose_download_folder_butt.setMaximumWidth(150)
 		self.quality_combo_box.addItems(["720", "1080"])
 		self.source_combo_box.addItems(["video", "playlist"])
+		self.source_combo_box.setCurrentIndex(1)
 		self.source_check_box.setVisible(False)
 		self.url_line_edit.setFixedWidth(250)
 		self.url_line_edit.setPlaceholderText("Enter the video or playlist URL")
-		self.url_line_edit.setText("YgoGXLWEVUk")
-		# self.url_line_edit.setText("PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM")
+		# self.url_line_edit.setText("YgoGXLWEVUk")
+		self.url_line_edit.setText("PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM")
 		self.other_data_display_check_box.setChecked(True)
 		self.date_format_combo_box.addItems(["DD.MM.YYYY", "YYYY.MM.DD", "YYYY-MM-DD"])
 
@@ -392,6 +412,7 @@ class NYTDialogWindow(QMainWindow):
 		super(NYTDialogWindow, self).__init__()
 
 		self.video_metadata = None
+		self.playlist_metadata = None
 
 		#####
 
@@ -484,68 +505,22 @@ class NYTDialogWindow(QMainWindow):
 		self.loader.founded.connect(self.loader_founded)
 		self.loader.updated.connect(self.loader_updated)
 		self.loader.messaged.connect(self.loader_messaged)
-		# self.loader.downloaded.connect(self.loader_downloaded)
 		self.loader.extracted.connect(self.loader_extracted)
+		self.loader.start_download.connect(self.loader_start_download)
+		self.loader.finish_download.connect(self.loader_finish_download)
 
-	def loader_founded(self, video_metadata):
-		self.download_group_box.setVisible(True)
-		# self.video_downloader_widget.setEnabled(True)
+	def loader_founded(self, metadata):
+		if "_type" in metadata and metadata["_type"] == "playlist":
+			self.video_data_widget.title_label.setText("Temp")
+			self.video_metadata = metadata
+			self.download_metadata_butt_clicked()
 
-		response = get(video_metadata['thumbnail'])
-		if response.status_code == 200:
-			pixmap = QPixmap()
-			pixmap.loadFromData(response.content)
-			# pixmap = pixmap.scaled(int(pixmap.width() * 0.25), int(pixmap.height() * 0.25), Qt.AspectRatioMode.KeepAspectRatio)
-			pixmap = pixmap.scaled(480, 270, Qt.AspectRatioMode.KeepAspectRatio)  #640*320, 480*270
-			self.video_data_widget.thumbnail_label.setPixmap(pixmap)
+			self.playlist_metadata = {"video": [entry['id'] for entry in metadata['entries']], "counter": 0}
+			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
 		else:
-			self.video_data_widget.thumbnail_label.setText("Не удалось загрузить картинку")
-
-		udload_video_date = datetime.strptime(video_metadata['upload_date'], "%Y%m%d")
-		video_metadata['upload_date'] = {
-			"DD.MM.YYYY": udload_video_date.strftime("%d.%m.%Y"),
-			"YYYY.MM.DD": udload_video_date.strftime("%Y.%m.%d"),
-			"YYYY-MM-DD": udload_video_date.strftime("%Y-%m-%d")
-		}
-
-		def unicode_safe(suspicious_line):
-			# Карта замен символов
-			char_map = {
-				"|": "｜",  # U+FF5C FULLWIDTH VERTICAL LINE
-				":": "꞉",  # U+A789 MODIFIER LETTER COLON
-				"/": "／",  # U+FF0F FULLWIDTH SOLIDUS
-				"\\": "＼",  # U+FF3C FULLWIDTH REVERSE SOLIDUS
-				"?": "？",  # U+FF1F FULLWIDTH QUESTION MARK
-				"*": "＊",  # U+FF0A FULLWIDTH ASTERISK
-				"<": "＜",  # U+FF1C FULLWIDTH LESS-THAN SIGN
-				">": "＞",  # U+FF1E FULLWIDTH GREATER-THAN SIGN
-				'"': "＂",  # U+FF02 FULLWIDTH QUOTATION MARK
-				"+": "＋",  # U+FF0B FULLWIDTH PLUS SIGN
-				"#": "＃",  # U+FF03 FULLWIDTH NUMBER SIGN
-			}
-
-			# Создаём регулярное выражение на основе ключей char_map
-			# Например: r"[|:/\\?*<>\"+#]"
-			pattern = re.compile(f"[{''.join(map(re.escape, char_map.keys()))}]")
-
-			# Проверяем, содержит ли suspicious_line недопустимые символы
-			if pattern.search(suspicious_line):
-				# Если содержит, производим замену
-				for char, replacement in char_map.items():
-					suspicious_line = suspicious_line.replace(char, replacement)
-			return suspicious_line
-
-		video_metadata['title'] = unicode_safe(video_metadata['title'])
-
-		self.video_data_widget.title_label.setText(video_metadata['title'])
-		self.video_data_widget.description_label.setPlainText(video_metadata['description'])
-		self.video_data_widget.duration_string_label.setText(video_metadata['duration_string'])
-		self.video_data_widget.upload_date_label.setText(video_metadata['upload_date'][self.video_finder_widget.date_format_combo_box.currentText()])
-		self.video_data_widget.view_count_label.setText(f"Количество просмотров: {video_metadata['view_count']}")
-		self.video_data_widget.like_count_label.setText(f"Количество лайков: {video_metadata['like_count']}")
-		self.video_data_widget.uploader_label.setText(f"<a href='{video_metadata['channel_url']}'>{video_metadata['uploader']}</a> ({video_metadata['channel_follower_count']} подписок)")
-
-		self.video_metadata = video_metadata
+			self.video_metadata = metadata
+			self.insert_video_metadata()
+			self.download_group_box.setVisible(True)
 
 	def loader_updated(self, max_percent, current_percent, message):
 		self.download_progress_bar.setMaximum(max_percent)
@@ -555,11 +530,19 @@ class NYTDialogWindow(QMainWindow):
 	def loader_messaged(self, message):
 		self.status_bar.showMessage(message)
 
-	# def loader_downloaded(self, message):
-	# 	pass
-
 	def loader_extracted(self):
 		self.extract_audio_butt_widget.extract_progress_bar.setValue(self.extract_audio_butt_widget.extract_progress_bar.value() + 1)
+
+	def loader_start_download(self):
+		self.download_butt_widget.setEnabled(False)
+
+	def loader_finish_download(self):
+		self.playlist_metadata["counter"] += 1
+		if self.playlist_metadata["counter"] == 3:
+			self.video_data_widget.setVisible(False)
+		else:
+			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+			self.download_butt_widget.setEnabled(True)
 
 	def enable_logging_check_box_toggled(self, checked):
 		if checked:
@@ -637,9 +620,14 @@ class NYTDialogWindow(QMainWindow):
 			self.video_data_widget.upload_date_label.setText(self.video_metadata['upload_date'][state])
 
 	def find_video_butt_clicked(self):
-		self.loader.submit_find_video(
-			self.video_finder_widget.url_line_edit.text()
-		)
+		if self.video_finder_widget.source_combo_box.currentText() == "playlist":
+			self.loader.submit_find_playlist(
+				self.video_finder_widget.url_line_edit.text()
+			)
+		else:
+			self.loader.submit_find_video(
+				self.video_finder_widget.url_line_edit.text()
+			)
 
 	def download_metadata_butt_clicked(self):
 		with open(f"{self.video_data_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
@@ -649,7 +637,8 @@ class NYTDialogWindow(QMainWindow):
 		name = f"{self.video_finder_widget.download_folder_label.text()}/"
 		name += f"[%(id)s] - {self.video_data_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_data_widget.title_label.text()}.%(ext)s"
 		self.loader.submit_download_video(
-			self.video_finder_widget.url_line_edit.text(),
+			# self.video_finder_widget.url_line_edit.text(),
+			self.video_metadata["id"],
 			name,
 			self.video_finder_widget.quality_combo_box.currentText()
 		)
@@ -658,7 +647,8 @@ class NYTDialogWindow(QMainWindow):
 		name = f"{self.video_finder_widget.download_folder_label.text()}/"
 		name += f"[%(id)s] - {self.video_data_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_data_widget.title_label.text()}.%(ext)s"
 		self.loader.submit_download_audio(
-			self.video_finder_widget.url_line_edit.text(),
+			# self.video_finder_widget.url_line_edit.text(),
+			self.video_metadata["id"],
 			name
 		)
 
@@ -695,6 +685,61 @@ class NYTDialogWindow(QMainWindow):
 		self.loader.submit_extract_all_audio(
 			self.video_finder_widget.enable_logging_check_box.isChecked()
 		)
+
+	def insert_video_metadata(self):
+		response = get(self.video_metadata['thumbnail'])
+		if response.status_code == 200:
+			pixmap = QPixmap()
+			pixmap.loadFromData(response.content)
+			# pixmap = pixmap.scaled(int(pixmap.width() * 0.25), int(pixmap.height() * 0.25), Qt.AspectRatioMode.KeepAspectRatio)
+			pixmap = pixmap.scaled(480, 270, Qt.AspectRatioMode.KeepAspectRatio)  # 640*320, 480*270
+			self.video_data_widget.thumbnail_label.setPixmap(pixmap)
+		else:
+			self.video_data_widget.thumbnail_label.setText("Не удалось загрузить картинку")
+
+		udload_video_date = datetime.strptime(self.video_metadata['upload_date'], "%Y%m%d")
+		self.video_metadata['upload_date'] = {
+			"DD.MM.YYYY": udload_video_date.strftime("%d.%m.%Y"),
+			"YYYY.MM.DD": udload_video_date.strftime("%Y.%m.%d"),
+			"YYYY-MM-DD": udload_video_date.strftime("%Y-%m-%d")
+		}
+
+		def unicode_safe(suspicious_line):
+			# Карта замен символов
+			char_map = {
+				"|": "｜",  # U+FF5C FULLWIDTH VERTICAL LINE
+				":": "꞉",  # U+A789 MODIFIER LETTER COLON
+				"/": "／",  # U+FF0F FULLWIDTH SOLIDUS
+				"\\": "＼",  # U+FF3C FULLWIDTH REVERSE SOLIDUS
+				"?": "？",  # U+FF1F FULLWIDTH QUESTION MARK
+				"*": "＊",  # U+FF0A FULLWIDTH ASTERISK
+				"<": "＜",  # U+FF1C FULLWIDTH LESS-THAN SIGN
+				">": "＞",  # U+FF1E FULLWIDTH GREATER-THAN SIGN
+				'"': "＂",  # U+FF02 FULLWIDTH QUOTATION MARK
+				"+": "＋",  # U+FF0B FULLWIDTH PLUS SIGN
+				"#": "＃",  # U+FF03 FULLWIDTH NUMBER SIGN
+			}
+
+			# Создаём регулярное выражение на основе ключей char_map
+			# Например: r"[|:/\\?*<>\"+#]"
+			pattern = re.compile(f"[{''.join(map(re.escape, char_map.keys()))}]")
+
+			# Проверяем, содержит ли suspicious_line недопустимые символы
+			if pattern.search(suspicious_line):
+				# Если содержит, производим замену
+				for char, replacement in char_map.items():
+					suspicious_line = suspicious_line.replace(char, replacement)
+			return suspicious_line
+
+		self.video_metadata['title'] = unicode_safe(self.video_metadata['title'])
+
+		self.video_data_widget.title_label.setText(self.video_metadata['title'])
+		self.video_data_widget.description_label.setPlainText(self.video_metadata['description'])
+		self.video_data_widget.duration_string_label.setText(self.video_metadata['duration_string'])
+		self.video_data_widget.upload_date_label.setText(self.video_metadata['upload_date'][self.video_finder_widget.date_format_combo_box.currentText()])
+		self.video_data_widget.view_count_label.setText(f"Количество просмотров: {self.video_metadata['view_count']}")
+		self.video_data_widget.like_count_label.setText(f"Количество лайков: {self.video_metadata['like_count']}")
+		self.video_data_widget.uploader_label.setText(f"<a href='{self.video_metadata['channel_url']}'>{self.video_metadata['uploader']}</a> ({self.video_metadata['channel_follower_count']} подписок)")
 
 if __name__ == '__main__':
 	app = QApplication(sys.argv)
