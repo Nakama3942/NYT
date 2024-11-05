@@ -664,11 +664,10 @@ class NYTDialogWindow(QMainWindow):
 
 	def extract_specified_audio_butt_clicked(self):
 		# Открытие диалога выбора файла
-		file_names, _ = QFileDialog.getOpenFileNames(self, "Выберите файл", "", "Все файлы (*)")
-		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(sum(1 for f in listdir(path.dirname(file_names[0])) if f.endswith(".mp4")))
-		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
+		file_names, _ = QFileDialog.getOpenFileNames(self, "Choose the video", self.video_finder_widget.download_folder_label.text(), "Video (*.mp4)")
 		if file_names:
-			log.debug(f"Выбранный файл: {file_names}")
+			self.extract_audio_butt_widget.extract_progress_bar.setMaximum(len(file_names))
+			self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
 			self.loader.submit_extract_specified_audio(
 				file_names,
 				self.video_finder_widget.enable_logging_check_box.isChecked()
@@ -676,19 +675,19 @@ class NYTDialogWindow(QMainWindow):
 
 	def extract_all_audio_in_specified_dir_butt_clicked(self):
 		# Открываем диалог для выбора директории
-		selected_dir = QFileDialog.getExistingDirectory(self, "Выберите директорию с видео")
-		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(sum(1 for f in listdir(selected_dir) if f.endswith(".mp4")))
-		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
+		selected_dir = QFileDialog.getExistingDirectory(self, "Choose the directory with video")
 		if selected_dir:
 			# Получаем список всех файлов в выбранной директории
-			video_files = listdir(selected_dir)
-			if video_files:
+			file_names = [path.join(selected_dir, video_file) for video_file in listdir(selected_dir) if video_file.endswith(".mp4")]
+			if file_names:
+				self.extract_audio_butt_widget.extract_progress_bar.setMaximum(len(file_names))
+				self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
 				self.loader.submit_extract_specified_audio(
-					[path.join(selected_dir, video_file) for video_file in video_files],
+					file_names,
 					self.video_finder_widget.enable_logging_check_box.isChecked()
 				)
 			else:
-				log.warning("В выбранной директории нет видеофайлов.")
+				log.warning("In chosen directory not video.")
 
 	def extract_all_audio_butt_clicked(self):
 		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(sum(1 for f in listdir(getcwd()) if f.endswith(".mp4")))
