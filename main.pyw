@@ -70,9 +70,6 @@ yt_dlp_log.addHandler(console_handler)
 yt_dlp_log.addHandler(file_handler)
 
 # todo
-#  1. Завершить реализацию загрузки плейлистов:
-#  1.1. После каждого видео останавливаться на подтверждение загрузки и указание имени файла
-#  1.2. Добавить настройки, выключающие переименование и добавляющие быструю загрузку
 #  2. Сделать больше логирования
 #  3. Проверить загрузку из других источников (например, твиттера)
 #  4. В настройках логирования добавить выключение логов ffmpeg и реализовать их запись в файл
@@ -239,13 +236,14 @@ class VideoFinderWidget(QWidget):
 		self.choose_download_folder_butt = QPushButton("Choose download folder")
 		self.advanced_naming_check_box = QCheckBox("Add the additional data to name video?")
 		self.extra_mode_check_box = QCheckBox("Activate extra download mode?")
-		self.playlst_check_box = QCheckBox("Playlist")
+		self.quality_label = QLabel("Choose the video quality:")
 		self.quality_combo_box = QComboBox()
+		self.quality_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+		self.playlst_check_box = QCheckBox("Playlist")
 		self.url_line_edit = QLineEdit()
 		self.find_video_butt = QPushButton("Find video")
 		self.other_data_display_check_box = QCheckBox("Display other video data?")
 		self.date_format_combo_box = QComboBox()
-		self.bottom_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
 		self.enable_logging_check_box.setCheckable(True)
 		self.enable_logging_check_box.setChecked(True)
@@ -272,8 +270,13 @@ class VideoFinderWidget(QWidget):
 		self.download_folder_layout.addWidget(self.choose_download_folder_butt)
 		self.download_folder_group_box.setLayout(self.download_folder_layout)
 
+		self.quality_layout = QHBoxLayout()
+		self.quality_layout.addWidget(self.quality_label)
+		self.quality_layout.addWidget(self.quality_combo_box)
+		self.quality_layout.addSpacerItem(self.quality_spacer)
+
 		self.url_layout = QHBoxLayout()
-		self.url_layout.addWidget(self.quality_combo_box)
+		self.url_layout.addWidget(self.playlst_check_box)
 		self.url_layout.addWidget(self.url_line_edit)
 
 		self.upload_date_layout = QHBoxLayout()
@@ -283,28 +286,27 @@ class VideoFinderWidget(QWidget):
 		self.video_finder_layout = QVBoxLayout()
 		self.video_finder_layout.addWidget(self.enable_logging_check_box)
 		self.video_finder_layout.addWidget(self.download_folder_group_box)
+		self.video_finder_layout.addLayout(self.upload_date_layout)
 		self.video_finder_layout.addWidget(self.advanced_naming_check_box)
 		self.video_finder_layout.addWidget(self.extra_mode_check_box)
-		self.video_finder_layout.addWidget(self.playlst_check_box)
+		self.video_finder_layout.addLayout(self.quality_layout)
 		self.video_finder_layout.addLayout(self.url_layout)
 		self.video_finder_layout.addWidget(self.find_video_butt)
-		self.video_finder_layout.addLayout(self.upload_date_layout)
-		self.video_finder_layout.addSpacerItem(self.bottom_spacer)
 
 		###
 
 		self.setLayout(self.video_finder_layout)
 
-class DownloadProgressBarsWidget(QWidget):
+class ProgressBarsWidget(QWidget):
 	def __init__(self):
-		super(DownloadProgressBarsWidget, self).__init__()
+		super(ProgressBarsWidget, self).__init__()
 
-		self.playlist_progress_bar = QProgressBar()
-		self.video_progress_bar = QProgressBar()
+		self.total_progress_bar = QProgressBar()
+		self.unit_progress_bar = QProgressBar()
 
 		self.progress_bars_layout = QVBoxLayout()
-		self.progress_bars_layout.addWidget(self.playlist_progress_bar)
-		self.progress_bars_layout.addWidget(self.video_progress_bar)
+		self.progress_bars_layout.addWidget(self.total_progress_bar)
+		self.progress_bars_layout.addWidget(self.unit_progress_bar)
 
 		###
 
@@ -402,18 +404,16 @@ class ExtractAudioButtWidget(QWidget):
 	def __init__(self):
 		super(ExtractAudioButtWidget, self).__init__()
 
-		self.extract_specified_audio_butt = QPushButton("From specified .mp4 file")
+		self.extract_specified_audio_butt = QPushButton("From specified .mp4 files")
 		self.extract_all_audio_in_specified_dir_butt = QPushButton("From all .mp4 files in specified directory")
 		self.extract_all_audio_butt = QPushButton("From all .mp4 files in this directory")
 		self.extract_progress_bar = QProgressBar()
-		self.extract_bottom_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
 		self.extract_audio_butt_widget_layout = QVBoxLayout()
 		self.extract_audio_butt_widget_layout.addWidget(self.extract_specified_audio_butt)
 		self.extract_audio_butt_widget_layout.addWidget(self.extract_all_audio_in_specified_dir_butt)
 		self.extract_audio_butt_widget_layout.addWidget(self.extract_all_audio_butt)
 		self.extract_audio_butt_widget_layout.addWidget(self.extract_progress_bar)
-		self.extract_audio_butt_widget_layout.addSpacerItem(self.extract_bottom_spacer)
 
 		###
 
@@ -429,20 +429,19 @@ class NYTDialogWindow(QMainWindow):
 		#####
 
 		self.video_finder_widget = VideoFinderWidget()
+		self.video_finder_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
 		self.video_finder_widget.enable_logging_check_box.toggled.connect(self.enable_logging_check_box_toggled)
 		self.video_finder_widget.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logs_check_box_state_changed)
 		self.video_finder_widget.enable_debug_logs_check_box.stateChanged.connect(self.enable_debug_logs_check_box_state_changed)
 		self.video_finder_widget.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
-		# self.video_finder_widget.extract_audio_check_box.stateChanged.connect(self.extract_audio_check_box_state_changed)
-		# self.video_finder_widget.source_combo_box.currentTextChanged.connect(self.source_combo_box_current_text_changed)
-		# self.video_finder_widget.source_check_box.stateChanged.connect(self.source_check_box_state_changed)
 		self.video_finder_widget.other_data_display_check_box.stateChanged.connect(self.other_data_display_check_box_state_changed)
 		self.video_finder_widget.date_format_combo_box.currentTextChanged.connect(self.date_format_combo_box_current_text_changed)
 		self.video_finder_widget.find_video_butt.clicked.connect(self.find_video_butt_clicked)
 
 		self.settings_group_box_layout = QVBoxLayout()
 		self.settings_group_box_layout.addWidget(self.video_finder_widget)
+		self.settings_group_box_layout.addSpacerItem(self.video_finder_spacer)
 
 		self.settings_group_box = QGroupBox("Settings")
 		self.settings_group_box.setFixedWidth(500)
@@ -450,53 +449,51 @@ class NYTDialogWindow(QMainWindow):
 
 		###
 
-		self.download_progress_bars_widget = DownloadProgressBarsWidget()
-
-		self.download_progress_bars_layout = QVBoxLayout()
-		self.download_progress_bars_layout.addWidget(self.download_progress_bars_widget)
-
-		self.download_progress_bars_group_box = QGroupBox("Progress downloading")
-		self.download_progress_bars_group_box.setFixedWidth(500)
-		self.download_progress_bars_group_box.setLayout(self.download_progress_bars_layout)
-
-		###
-
-		self.video_data_widget = VideoDataWidget()
-		self.download_butt_widget = DownloadButtWidget()
-
-		# self.download_progress_bar = QProgressBar()
-		# self.download_progress_bar.setValue(0)
-
-		self.download_butt_widget.download_metadata_butt.clicked.connect(self.download_metadata_butt_clicked)
-		self.download_butt_widget.download_video_butt.clicked.connect(self.download_video_butt_clicked)
-		self.download_butt_widget.download_audio_butt.clicked.connect(self.download_audio_butt_clicked)
-
-		self.download_group_box_layout = QVBoxLayout()
-		self.download_group_box_layout.addWidget(self.video_data_widget)
-		self.download_group_box_layout.addWidget(self.download_butt_widget)
-		# self.download_group_box_layout.addWidget(self.download_progress_bar)
-
-		self.download_group_box = QGroupBox("Download")
-		self.download_group_box.setLayout(self.download_group_box_layout)
-		self.download_group_box.setFixedWidth(500)
-		# self.download_group_box.setVisible(False)
-		# self.download_group_box.setEnabled(False)
-		self.video_data_widget.setVisible(False)
-
-		#####
-
 		self.extract_audio_butt_widget = ExtractAudioButtWidget()
 
 		self.extract_audio_butt_widget.extract_specified_audio_butt.clicked.connect(self.extract_specified_audio_butt_clicked)
 		self.extract_audio_butt_widget.extract_all_audio_in_specified_dir_butt.clicked.connect(self.extract_all_audio_in_specified_dir_butt_clicked)
 		self.extract_audio_butt_widget.extract_all_audio_butt.clicked.connect(self.extract_all_audio_butt_clicked)
 
-		self.extract_group_box_layout = QVBoxLayout()
-		self.extract_group_box_layout.addWidget(self.extract_audio_butt_widget)
+		self.extract_layout = QVBoxLayout()
+		self.extract_layout.addWidget(self.extract_audio_butt_widget)
 
 		self.extract_group_box = QGroupBox("Extract audio")
 		self.extract_group_box.setFixedWidth(500)
-		self.extract_group_box.setLayout(self.extract_group_box_layout)
+		self.extract_group_box.setLayout(self.extract_layout)
+
+		###
+
+		self.video_metadata_widget = VideoDataWidget()
+		self.video_metadata_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+		self.video_metadata_layout = QVBoxLayout()
+		self.video_metadata_layout.addWidget(self.video_metadata_widget)
+		self.video_metadata_layout.addSpacerItem(self.video_metadata_spacer)
+
+		self.video_metadata_group_box = QGroupBox("Video metadata")
+		self.video_metadata_group_box.setLayout(self.video_metadata_layout)
+		self.video_metadata_group_box.setFixedWidth(500)
+		# self.download_group_box.setVisible(False)
+		# self.download_group_box.setEnabled(False)
+		self.video_metadata_widget.setVisible(False)
+
+		###
+
+		self.download_butt_widget = DownloadButtWidget()
+		self.download_progress_bars_widget = ProgressBarsWidget()
+
+		self.download_butt_widget.download_metadata_butt.clicked.connect(self.download_metadata_butt_clicked)
+		self.download_butt_widget.download_video_butt.clicked.connect(self.download_video_butt_clicked)
+		self.download_butt_widget.download_audio_butt.clicked.connect(self.download_audio_butt_clicked)
+
+		self.download_layout = QVBoxLayout()
+		self.download_layout.addWidget(self.download_butt_widget)
+		self.download_layout.addWidget(self.download_progress_bars_widget)
+
+		self.download_group_box = QGroupBox("Download")
+		self.download_group_box.setFixedWidth(500)
+		self.download_group_box.setLayout(self.download_layout)
 
 		#####
 
@@ -506,11 +503,11 @@ class NYTDialogWindow(QMainWindow):
 
 		self.left_half_main_layout = QVBoxLayout()
 		self.left_half_main_layout.addWidget(self.settings_group_box)
-		self.left_half_main_layout.addWidget(self.download_progress_bars_group_box)
+		self.left_half_main_layout.addWidget(self.extract_group_box)
 
 		self.right_half_main_layout = QVBoxLayout()
+		self.right_half_main_layout.addWidget(self.video_metadata_group_box)
 		self.right_half_main_layout.addWidget(self.download_group_box)
-		self.right_half_main_layout.addWidget(self.extract_group_box)
 
 		self.main_layout = QHBoxLayout()
 		self.main_layout.addLayout(self.left_half_main_layout)
@@ -541,18 +538,18 @@ class NYTDialogWindow(QMainWindow):
 			# self.download_metadata_butt_clicked()
 
 			self.playlist_metadata = {"video": [entry['id'] for entry in metadata['entries']], "counter": 0}
-			self.download_progress_bars_widget.playlist_progress_bar.setMaximum(len(self.playlist_metadata["video"]))
+			self.download_progress_bars_widget.total_progress_bar.setMaximum(len(self.playlist_metadata["video"]))
 			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
 		else:
 			self.video_metadata = metadata
 			self.insert_video_metadata()
-			if not self.video_data_widget.isVisible():
-				self.video_data_widget.setVisible(True)
-				self.download_butt_widget.setEnabled(True)
+			self.download_butt_widget.setEnabled(True)
+			if not self.video_metadata_widget.isVisible():
+				self.video_metadata_widget.setVisible(True)
 
 	def loader_updated(self, max_percent, current_percent, message):
-		self.download_progress_bars_widget.video_progress_bar.setMaximum(max_percent)
-		self.download_progress_bars_widget.video_progress_bar.setValue(current_percent)
+		self.download_progress_bars_widget.unit_progress_bar.setMaximum(max_percent)
+		self.download_progress_bars_widget.unit_progress_bar.setValue(current_percent)
 		self.status_bar.showMessage(message)
 
 	def loader_messaged(self, message):
@@ -566,13 +563,12 @@ class NYTDialogWindow(QMainWindow):
 
 	def loader_finish_download(self):
 		self.playlist_metadata["counter"] += 1
-		self.download_progress_bars_widget.playlist_progress_bar.setValue(self.playlist_metadata["counter"])
+		self.download_progress_bars_widget.total_progress_bar.setValue(self.playlist_metadata["counter"])
 		if self.playlist_metadata["counter"] == len(self.playlist_metadata["video"]):
-			self.video_data_widget.setVisible(False)
+			self.video_metadata_widget.setVisible(False)
 			self.download_butt_widget.setEnabled(False)
 		else:
 			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
-			self.download_butt_widget.setEnabled(True)
 
 	def enable_logging_check_box_toggled(self, checked):
 		if checked:
@@ -623,35 +619,21 @@ class NYTDialogWindow(QMainWindow):
 		else:
 			self.download_butt_widget.download_audio_butt.setDisabled(False)
 
-	# def source_combo_box_current_text_changed(self, state):
-	# 	if state == "video":
-	# 		self.video_finder_widget.url_label.setText("https://www.youtube.com/watch?v=")
-	# 		self.video_finder_widget.source_check_box.setVisible(False)
-	# 	else:
-	# 		self.video_finder_widget.url_label.setText("https://www.youtube.com/playlist?list=")
-	# 		self.video_finder_widget.source_check_box.setVisible(True)
-
-	# def source_check_box_state_changed(self, state):
-	# 	if state:
-	# 		self.download_group_box.setVisible(True)
-	# 	else:
-	# 		self.download_group_box.setVisible(False)
-
 	def other_data_display_check_box_state_changed(self, state):
 		if state:
-			self.video_data_widget.other_data_group_box.setVisible(True)
+			self.video_metadata_widget.other_data_group_box.setVisible(True)
 			self.video_finder_widget.date_format_combo_box.setVisible(True)
 		else:
-			self.video_data_widget.other_data_group_box.setVisible(False)
+			self.video_metadata_widget.other_data_group_box.setVisible(False)
 			self.video_finder_widget.date_format_combo_box.setVisible(False)
 
 	def date_format_combo_box_current_text_changed(self, state):
-		if self.video_data_widget.isVisible():
-			self.video_data_widget.upload_date_label.setText(self.video_metadata['upload_date'][state])
+		if self.video_metadata_widget.isVisible():
+			self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][state])
 
 	def find_video_butt_clicked(self):
-		self.download_progress_bars_widget.playlist_progress_bar.setValue(0)
-		self.download_progress_bars_widget.video_progress_bar.setValue(0)
+		self.download_progress_bars_widget.total_progress_bar.setValue(0)
+		self.download_progress_bars_widget.unit_progress_bar.setValue(0)
 		if self.video_finder_widget.playlst_check_box.isChecked():
 			self.loader.submit_find_playlist(
 				self.video_finder_widget.url_line_edit.text()
@@ -667,7 +649,7 @@ class NYTDialogWindow(QMainWindow):
 
 	def download_video_butt_clicked(self):
 		name = f"{self.video_finder_widget.download_folder_label.text()}/"
-		name += f"[%(id)s] - {self.video_data_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_data_widget.title_label.text()}.%(ext)s"
+		name += f"[%(id)s] - {self.video_metadata_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_metadata_widget.title_label.text()}.%(ext)s"
 		self.loader.submit_download_video(
 			self.video_metadata["id"],
 			name,
@@ -676,7 +658,7 @@ class NYTDialogWindow(QMainWindow):
 
 	def download_audio_butt_clicked(self):
 		name = f"{self.video_finder_widget.download_folder_label.text()}/"
-		name += f"[%(id)s] - {self.video_data_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_data_widget.title_label.text()}.%(ext)s"
+		name += f"[%(id)s] - {self.video_metadata_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.video_finder_widget.advanced_naming_check_box.isChecked() else f"{self.video_metadata_widget.title_label.text()}.%(ext)s"
 		self.loader.submit_download_audio(
 			self.video_metadata["id"],
 			name
@@ -723,9 +705,9 @@ class NYTDialogWindow(QMainWindow):
 			pixmap.loadFromData(response.content)
 			# pixmap = pixmap.scaled(int(pixmap.width() * 0.25), int(pixmap.height() * 0.25), Qt.AspectRatioMode.KeepAspectRatio)
 			pixmap = pixmap.scaled(480, 270, Qt.AspectRatioMode.KeepAspectRatio)  # 640*320, 480*270
-			self.video_data_widget.thumbnail_label.setPixmap(pixmap)
+			self.video_metadata_widget.thumbnail_label.setPixmap(pixmap)
 		else:
-			self.video_data_widget.thumbnail_label.setText("Не удалось загрузить картинку")
+			self.video_metadata_widget.thumbnail_label.setText("Не удалось загрузить картинку")
 
 		udload_video_date = datetime.strptime(self.video_metadata['upload_date'], "%Y%m%d")
 		self.video_metadata['upload_date'] = {
@@ -763,13 +745,13 @@ class NYTDialogWindow(QMainWindow):
 
 		self.video_metadata['title'] = unicode_safe(self.video_metadata['title'])
 
-		self.video_data_widget.title_label.setText(self.video_metadata['title'])
-		self.video_data_widget.description_label.setPlainText(self.video_metadata['description'])
-		self.video_data_widget.duration_string_label.setText(self.video_metadata['duration_string'])
-		self.video_data_widget.upload_date_label.setText(self.video_metadata['upload_date'][self.video_finder_widget.date_format_combo_box.currentText()])
-		self.video_data_widget.view_count_label.setText(f"Количество просмотров: {self.video_metadata['view_count']}")
-		self.video_data_widget.like_count_label.setText(f"Количество лайков: {self.video_metadata['like_count']}")
-		self.video_data_widget.uploader_label.setText(f"<a href='{self.video_metadata['channel_url']}'>{self.video_metadata['uploader']}</a> ({self.video_metadata['channel_follower_count']} подписок)")
+		self.video_metadata_widget.title_label.setText(self.video_metadata['title'])
+		self.video_metadata_widget.description_label.setPlainText(self.video_metadata['description'])
+		self.video_metadata_widget.duration_string_label.setText(self.video_metadata['duration_string'])
+		self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][self.video_finder_widget.date_format_combo_box.currentText()])
+		self.video_metadata_widget.view_count_label.setText(f"Количество просмотров: {self.video_metadata['view_count']}")
+		self.video_metadata_widget.like_count_label.setText(f"Количество лайков: {self.video_metadata['like_count']}")
+		self.video_metadata_widget.uploader_label.setText(f"<a href='{self.video_metadata['channel_url']}'>{self.video_metadata['uploader']}</a> ({self.video_metadata['channel_follower_count']} подписок)")
 
 if __name__ == '__main__':
 	app = QApplication(sys.argv)
