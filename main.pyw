@@ -54,7 +54,7 @@ console_handler.addFilter(DownloadFilter())
 # Обработчик для записи в файл
 file_handler = logging.FileHandler('NYT.log', encoding='utf-8')
 file_handler.setFormatter(formatter)
-file_handler.setLevel(logging.INFO)
+file_handler.setLevel(logging.DEBUG)
 file_handler.addFilter(DownloadFilter())
 
 # Настройка основного логгера программы (nyt)
@@ -137,7 +137,7 @@ class Loader(QObject):
 	def __download_video(self, video_url, video_title, video_format):
 		self.start_download.emit()
 		ydl_opts = {
-			"format": f"best[height<={video_format}]",
+			"format": f"{video_format}+ba[ext=m4a]",
 			"quiet": False,
 			"outtmpl": video_title,
 			"progress_hooks": [self.__update_emitter],
@@ -251,7 +251,7 @@ class VideoFinderWidget(QWidget):
 		self.download_folder_label.setReadOnly(True)
 		self.download_folder_label.setText(getcwd())
 		self.choose_download_folder_butt.setMaximumWidth(150)
-		self.quality_combo_box.addItems(["720", "1080"])
+		self.quality_combo_box.addItems(["unknown"])
 		self.playlst_check_box.setChecked(True)
 		self.extra_mode_check_box.setEnabled(False)
 		self.url_line_edit.setPlaceholderText("Enter the video or playlist URL/ID")
@@ -532,18 +532,33 @@ class NYTDialogWindow(QMainWindow):
 		self.loader.finish_download.connect(self.loader_finish_download)
 
 	def loader_founded(self, metadata):
-		if "_type" in metadata and metadata["_type"] == "playlist":
-			# self.video_data_widget.title_label.setText("Temp")
-			# self.video_metadata = metadata
-			# self.download_metadata_butt_clicked()
+		# self.video_metadata_widget.title_label.setText(metadata["id"])
+		# self.video_metadata = metadata
+		# self.download_metadata_butt_clicked()
 
+		if "_type" in metadata and metadata["_type"] == "playlist":
 			self.playlist_metadata = {"video": [entry['id'] for entry in metadata['entries']], "counter": 0}
 			self.download_progress_bars_widget.total_progress_bar.setMaximum(len(self.playlist_metadata["video"]))
 			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
 		else:
 			self.video_metadata = metadata
+			resolutions = sorted(
+				set(
+					fmt["format_note"] for fmt in self.video_metadata["formats"]
+					if "format_note" in fmt
+						and fmt["format_note"].endswith("p")
+						and fmt["format_note"][:-1].isdigit()
+						and fmt["ext"] == "mp4"
+				),
+				key=lambda r: int(r.replace("p", "")),
+				reverse=True
+			)
+
 			self.insert_video_metadata()
 			self.download_butt_widget.setEnabled(True)
+			self.video_finder_widget.quality_combo_box.clear()
+			self.video_finder_widget.quality_combo_box.addItems(resolutions)
+			self.video_finder_widget.quality_combo_box.setCurrentText(resolutions[0] if int(resolutions[0].replace("p", "")) <= 720 else "720p")
 			if not self.video_metadata_widget.isVisible():
 				self.video_metadata_widget.setVisible(True)
 
@@ -567,6 +582,8 @@ class NYTDialogWindow(QMainWindow):
 		if self.playlist_metadata["counter"] == len(self.playlist_metadata["video"]):
 			self.video_metadata_widget.setVisible(False)
 			self.download_butt_widget.setEnabled(False)
+			self.video_finder_widget.quality_combo_box.clear()
+			self.video_finder_widget.quality_combo_box.addItem("unknown")
 		else:
 			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
 
@@ -644,7 +661,7 @@ class NYTDialogWindow(QMainWindow):
 			)
 
 	def download_metadata_butt_clicked(self):
-		with open(f"{self.video_data_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
+		with open(f"{self.video_metadata_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
 			json.dump(self.video_metadata, json_file, indent=4)
 
 	def download_video_butt_clicked(self):
@@ -653,7 +670,7 @@ class NYTDialogWindow(QMainWindow):
 		self.loader.submit_download_video(
 			self.video_metadata["id"],
 			name,
-			self.video_finder_widget.quality_combo_box.currentText()
+			[fmt["format_id"] for fmt in self.video_metadata["formats"] if fmt.get("format_note") == self.video_finder_widget.quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0]
 		)
 
 	def download_audio_butt_clicked(self):
@@ -699,6 +716,9 @@ class NYTDialogWindow(QMainWindow):
 		)
 
 	def insert_video_metadata(self):
+		for fmt in self.video_metadata["formats"]:
+			log.debug(f"ID: {fmt['format_id']}, Height: x{fmt.get('height', '-')}, Ext: {fmt['ext']}, Note: {fmt.get('format_note', '-')}")
+
 		response = get(self.video_metadata['thumbnail'])
 		if response.status_code == 200:
 			pixmap = QPixmap()
