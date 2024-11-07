@@ -239,7 +239,7 @@ class VideoFinderWidget(QWidget):
 		self.quality_label = QLabel("Choose the video quality:")
 		self.quality_combo_box = QComboBox()
 		self.quality_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-		self.playlst_check_box = QCheckBox("Playlist")
+		self.playlist_check_box = QCheckBox("Playlist")
 		self.url_line_edit = QLineEdit()
 		self.find_video_butt = QPushButton("Find video")
 		self.extra_video_mode_butt = QPushButton("Run in extra-mode download video")
@@ -254,7 +254,7 @@ class VideoFinderWidget(QWidget):
 		self.download_folder_label.setText(getcwd())
 		self.choose_download_folder_butt.setMaximumWidth(150)
 		self.quality_combo_box.addItems(["unknown"])
-		self.playlst_check_box.setChecked(True)
+		self.playlist_check_box.setChecked(True)
 		self.url_line_edit.setPlaceholderText("Enter the video or playlist URL/ID")
 		# self.url_line_edit.setText("YgoGXLWEVUk")
 		self.url_line_edit.setText("PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM")
@@ -277,7 +277,7 @@ class VideoFinderWidget(QWidget):
 		self.quality_layout.addSpacerItem(self.quality_spacer)
 
 		self.url_layout = QHBoxLayout()
-		self.url_layout.addWidget(self.playlst_check_box)
+		self.url_layout.addWidget(self.playlist_check_box)
 		self.url_layout.addWidget(self.url_line_edit)
 
 		self.upload_date_layout = QHBoxLayout()
@@ -432,6 +432,7 @@ class NYTDialogWindow(QMainWindow):
 		self.playlist_metadata = None
 		self.extra_video_mode = False
 		self.extra_audio_mode = False
+		self.standard_quality = 144
 
 		#####
 
@@ -444,6 +445,7 @@ class NYTDialogWindow(QMainWindow):
 		self.video_finder_widget.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
 		self.video_finder_widget.other_data_display_check_box.stateChanged.connect(self.other_data_display_check_box_state_changed)
 		self.video_finder_widget.date_format_combo_box.currentTextChanged.connect(self.date_format_combo_box_current_text_changed)
+		self.video_finder_widget.playlist_check_box.stateChanged.connect(self.playlist_check_box_state_changed)
 		self.video_finder_widget.find_video_butt.clicked.connect(self.find_video_butt_clicked)
 		self.video_finder_widget.extra_video_mode_butt.clicked.connect(self.extra_video_mode_butt_clicked)
 		self.video_finder_widget.extra_audio_mode_butt.clicked.connect(self.extra_audio_mode_butt_clicked)
@@ -564,7 +566,7 @@ class NYTDialogWindow(QMainWindow):
 			self.insert_video_metadata()
 			self.video_finder_widget.quality_combo_box.clear()
 			self.video_finder_widget.quality_combo_box.addItems(resolutions)
-			self.video_finder_widget.quality_combo_box.setCurrentText(resolutions[0] if int(resolutions[0].replace("p", "")) <= 144 else "144p")
+			self.video_finder_widget.quality_combo_box.setCurrentText(resolutions[0] if int(resolutions[0].replace("p", "")) <= self.standard_quality else f"{self.standard_quality}p")
 			if not self.video_metadata_widget.isVisible():
 				self.video_metadata_widget.setVisible(True)
 			if self.extra_video_mode:
@@ -589,18 +591,26 @@ class NYTDialogWindow(QMainWindow):
 		self.download_butt_widget.setEnabled(False)
 
 	def loader_finish_download(self):
-		self.playlist_metadata["counter"] += 1
-		self.download_progress_bars_widget.total_progress_bar.setValue(self.playlist_metadata["counter"])
-		if self.playlist_metadata["counter"] == len(self.playlist_metadata["video"]):
-			self.extra_video_mode = False
-			self.extra_audio_mode = False
+		if self.video_finder_widget.playlist_check_box.isChecked():
+			self.playlist_metadata["counter"] += 1
+			self.download_progress_bars_widget.total_progress_bar.setValue(self.playlist_metadata["counter"])
+			if self.playlist_metadata["counter"] == len(self.playlist_metadata["video"]):
+				self.extra_video_mode = False
+				self.extra_audio_mode = False
+				self.video_metadata_widget.setVisible(False)
+				self.video_finder_widget.quality_combo_box.clear()
+				self.video_finder_widget.quality_combo_box.addItem("unknown")
+				if self.download_butt_widget.isEnabled():
+					self.download_butt_widget.setEnabled(False)
+			else:
+				self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+		else:
+			self.download_progress_bars_widget.total_progress_bar.setMaximum(1)
+			self.download_progress_bars_widget.total_progress_bar.setValue(1)
+			self.download_butt_widget.setEnabled(False)
 			self.video_metadata_widget.setVisible(False)
 			self.video_finder_widget.quality_combo_box.clear()
 			self.video_finder_widget.quality_combo_box.addItem("unknown")
-			if self.download_butt_widget.isEnabled():
-				self.download_butt_widget.setEnabled(False)
-		else:
-			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
 
 	def enable_logging_check_box_toggled(self, checked):
 		if checked:
@@ -663,8 +673,16 @@ class NYTDialogWindow(QMainWindow):
 		if self.video_metadata_widget.isVisible():
 			self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][state])
 
+	def playlist_check_box_state_changed(self, state):
+		if state:
+			self.video_finder_widget.extra_video_mode_butt.setEnabled(True)
+			self.video_finder_widget.extra_audio_mode_butt.setEnabled(True)
+		else:
+			self.video_finder_widget.extra_video_mode_butt.setEnabled(False)
+			self.video_finder_widget.extra_audio_mode_butt.setEnabled(False)
+
 	def find_video_butt_clicked(self):
-		if self.video_finder_widget.playlst_check_box.isChecked():
+		if self.video_finder_widget.playlist_check_box.isChecked():
 			self.loader.submit_find_playlist(
 				self.video_finder_widget.url_line_edit.text()
 			)
