@@ -78,6 +78,7 @@ yt_dlp_log.addHandler(file_handler)
 #  7. Провести рефакторинг кода
 #  8. Добавить анимацию ожидания поиска
 #  9. Добавить кнопку загрузки и видео, и аудио вместе
+#  10. Реализовать сохранение настроек
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
@@ -235,12 +236,14 @@ class SettingsWidget(QWidget):
 		self.extra_download_group_box = QGroupBox("Extra-mode")
 		self.extra_download_video_check_box = QCheckBox("Run extra download video")
 		self.extra_download_audio_check_box = QCheckBox("Run extra download audio")
+		self.other_data_display_check_box = QGroupBox("Display other video data?")
+		self.date_format_label = QLabel("Choose the video quality:")
+		self.date_format_combo_box = QComboBox()
+		self.date_format_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 		self.advanced_naming_check_box = QCheckBox("Add the additional data to name video?")
-		self.quality_label = QLabel("Choose the video quality:")
+		self.quality_label = QLabel("Choose the data format:")
 		self.quality_combo_box = QComboBox()
 		self.quality_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-		self.other_data_display_check_box = QCheckBox("Display other video data?")
-		self.date_format_combo_box = QComboBox()
 
 		self.enable_logging_check_box.setCheckable(True)
 		self.enable_logging_check_box.setChecked(True)
@@ -249,8 +252,20 @@ class SettingsWidget(QWidget):
 		self.download_folder_label.setText(getcwd())
 		self.choose_download_folder_butt.setMaximumWidth(150)
 		self.quality_combo_box.addItems(["unknown"])
+		self.other_data_display_check_box.setCheckable(True)
 		self.other_data_display_check_box.setChecked(True)
-		self.date_format_combo_box.addItems(["DD.MM.YYYY", "YYYY.MM.DD", "YYYY-MM-DD"])
+		self.date_format_combo_box.addItems([
+			"DD.MM.YYYY",  # Standard
+			"MM.DD.YYYY",  # Stupid
+			"YYYY.MM.DD",  # American
+			"YYYY-MM-DD"  # American alternative
+		])
+
+		self.enable_logging_check_box.toggled.connect(self.enable_logging_check_box_toggled)
+		self.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logs_check_box_state_changed)
+		self.enable_debug_logs_check_box.stateChanged.connect(self.enable_debug_logs_check_box_state_changed)
+		self.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
+		self.other_data_display_check_box.toggled.connect(self.other_data_display_check_box_toggled)
 
 		self.logging_layout = QHBoxLayout()
 		self.logging_layout.addWidget(self.enable_yt_dlp_logs_check_box)
@@ -267,26 +282,74 @@ class SettingsWidget(QWidget):
 		self.extra_download_layout.addWidget(self.extra_download_audio_check_box)
 		self.extra_download_group_box.setLayout(self.extra_download_layout)
 
+		self.other_data_display_layout = QHBoxLayout()
+		self.other_data_display_layout.addWidget(self.date_format_label)
+		self.other_data_display_layout.addWidget(self.date_format_combo_box)
+		self.other_data_display_layout.addSpacerItem(self.date_format_spacer)
+		self.other_data_display_check_box.setLayout(self.other_data_display_layout)
+
 		self.quality_layout = QHBoxLayout()
 		self.quality_layout.addWidget(self.quality_label)
 		self.quality_layout.addWidget(self.quality_combo_box)
 		self.quality_layout.addSpacerItem(self.quality_spacer)
 
-		self.upload_date_layout = QHBoxLayout()
-		self.upload_date_layout.addWidget(self.other_data_display_check_box)
-		self.upload_date_layout.addWidget(self.date_format_combo_box)
-
 		self.video_finder_layout = QVBoxLayout()
 		self.video_finder_layout.addWidget(self.enable_logging_check_box)
 		self.video_finder_layout.addWidget(self.download_folder_group_box)
 		self.video_finder_layout.addWidget(self.extra_download_group_box)
-		self.video_finder_layout.addLayout(self.upload_date_layout)
+		self.video_finder_layout.addWidget(self.other_data_display_check_box)
 		self.video_finder_layout.addWidget(self.advanced_naming_check_box)
 		self.video_finder_layout.addLayout(self.quality_layout)
 
 		###
 
 		self.setLayout(self.video_finder_layout)
+
+	def enable_logging_check_box_toggled(self, checked):
+		if checked:
+			# Включаем обработчики
+			log.addHandler(console_handler)
+			log.addHandler(file_handler)
+			yt_dlp_log.addHandler(console_handler)
+			yt_dlp_log.addHandler(file_handler)
+
+			# Разблокируем QCheckBox
+			self.enable_debug_logs_check_box.setEnabled(True)
+			self.enable_yt_dlp_logs_check_box.setEnabled(True)
+		else:
+			# Отключаем обработчики
+			log.removeHandler(console_handler)
+			log.removeHandler(file_handler)
+			yt_dlp_log.removeHandler(console_handler)
+			yt_dlp_log.removeHandler(file_handler)
+
+			# Блокируем QCheckBox
+			self.enable_debug_logs_check_box.setEnabled(False)
+			self.enable_yt_dlp_logs_check_box.setEnabled(False)
+
+	def enable_yt_dlp_logs_check_box_state_changed(self, state):
+		if state:
+			# Включаем логирование yt_dlp
+			yt_dlp_log.addHandler(console_handler)
+			yt_dlp_log.addHandler(file_handler)
+		else:
+			# Отключаем логирование yt_dlp
+			yt_dlp_log.removeHandler(console_handler)
+			yt_dlp_log.removeHandler(file_handler)
+
+	def enable_debug_logs_check_box_state_changed(self, state):
+		if state:
+			# Устанавливаем уровень DEBUG для файлового обработчика
+			file_handler.setLevel(logging.DEBUG)
+		else:
+			# Устанавливаем уровень INFO для файлового обработчика
+			file_handler.setLevel(logging.INFO)
+
+	def choose_download_folder_butt_clicked(self):
+		self.download_folder_label.setText(QFileDialog.getExistingDirectory(self, "Select download directory"))
+
+	def other_data_display_check_box_toggled(self, state):
+		self.date_format_combo_box.setEnabled(state)
 
 class ProgressBarsWidget(QWidget):
 	def __init__(self):
@@ -450,11 +513,7 @@ class NYTDialogWindow(QMainWindow):
 		self.settings_widget = SettingsWidget()
 		self.settings_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
-		self.settings_widget.enable_logging_check_box.toggled.connect(self.enable_logging_check_box_toggled)
-		self.settings_widget.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logs_check_box_state_changed)
-		self.settings_widget.enable_debug_logs_check_box.stateChanged.connect(self.enable_debug_logs_check_box_state_changed)
-		self.settings_widget.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
-		self.settings_widget.other_data_display_check_box.stateChanged.connect(self.other_data_display_check_box_state_changed)
+		self.settings_widget.other_data_display_check_box.toggled.connect(self.other_data_display_check_box_toggled)
 		self.settings_widget.date_format_combo_box.currentTextChanged.connect(self.date_format_combo_box_current_text_changed)
 
 		self.settings_group_box_layout = QVBoxLayout()
@@ -616,60 +675,14 @@ class NYTDialogWindow(QMainWindow):
 			else:
 				self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
 		else:
-			self.download_progress_bars_widget.total_progress_bar.setMaximum(1)
-			self.download_progress_bars_widget.total_progress_bar.setValue(1)
 			self.settings_widget.extra_download_video_check_box.setChecked(False)
 			self.settings_widget.extra_download_audio_check_box.setChecked(False)
 			self.video_metadata_widget.setVisible(False)
 			self.settings_widget.quality_combo_box.clear()
 			self.settings_widget.quality_combo_box.addItem("unknown")
 
-	def enable_logging_check_box_toggled(self, checked):
-		if checked:
-			# Включаем обработчики
-			log.addHandler(console_handler)
-			log.addHandler(file_handler)
-			yt_dlp_log.addHandler(console_handler)
-			yt_dlp_log.addHandler(file_handler)
-
-			# Разблокируем QCheckBox
-			self.settings_widget.enable_debug_logs_check_box.setEnabled(True)
-			self.settings_widget.enable_yt_dlp_logs_check_box.setEnabled(True)
-		else:
-			# Отключаем обработчики
-			log.removeHandler(console_handler)
-			log.removeHandler(file_handler)
-			yt_dlp_log.removeHandler(console_handler)
-			yt_dlp_log.removeHandler(file_handler)
-
-			# Блокируем QCheckBox
-			self.settings_widget.enable_debug_logs_check_box.setEnabled(False)
-			self.settings_widget.enable_yt_dlp_logs_check_box.setEnabled(False)
-
-	def enable_yt_dlp_logs_check_box_state_changed(self, state):
-		if state:
-			# Включаем логирование yt_dlp
-			yt_dlp_log.addHandler(console_handler)
-			yt_dlp_log.addHandler(file_handler)
-		else:
-			# Отключаем логирование yt_dlp
-			yt_dlp_log.removeHandler(console_handler)
-			yt_dlp_log.removeHandler(file_handler)
-
-	def enable_debug_logs_check_box_state_changed(self, state):
-		if state:
-			# Устанавливаем уровень DEBUG для файлового обработчика
-			file_handler.setLevel(logging.DEBUG)
-		else:
-			# Устанавливаем уровень INFO для файлового обработчика
-			file_handler.setLevel(logging.INFO)
-
-	def choose_download_folder_butt_clicked(self):
-		self.settings_widget.download_folder_label.setText(QFileDialog.getExistingDirectory(self, "Выберите директорию с видео"))
-
-	def other_data_display_check_box_state_changed(self, state):
+	def other_data_display_check_box_toggled(self, state):
 		self.video_metadata_widget.other_data_group_box.setVisible(state)
-		self.settings_widget.date_format_combo_box.setVisible(state)
 
 	def date_format_combo_box_current_text_changed(self, state):
 		if self.video_metadata_widget.isVisible():
@@ -789,6 +802,7 @@ class NYTDialogWindow(QMainWindow):
 		udload_video_date = datetime.strptime(self.video_metadata['upload_date'], "%Y%m%d")
 		self.video_metadata['upload_date'] = {
 			"DD.MM.YYYY": udload_video_date.strftime("%d.%m.%Y"),
+			"MM.DD.YYYY": udload_video_date.strftime("%m.%d.%Y"),
 			"YYYY.MM.DD": udload_video_date.strftime("%Y.%m.%d"),
 			"YYYY-MM-DD": udload_video_date.strftime("%Y-%m-%d")
 		}
