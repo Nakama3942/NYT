@@ -70,7 +70,6 @@ yt_dlp_log.addHandler(console_handler)
 yt_dlp_log.addHandler(file_handler)
 
 # todo
-#  1. Реализовать остановку екстра-режима
 #  2. Сделать больше логирования
 #  3. Проверить загрузку из других источников (например, твиттера)
 #  4. В настройках логирования добавить выключение логов ffmpeg и реализовать их запись в файл
@@ -233,6 +232,9 @@ class SettingsWidget(QWidget):
 		self.download_folder_group_box = QGroupBox("Download folder")
 		self.download_folder_label = QLineEdit()
 		self.choose_download_folder_butt = QPushButton("Choose download folder")
+		self.extra_download_group_box = QGroupBox("Extra-mode")
+		self.extra_download_video_check_box = QCheckBox("Run extra download video")
+		self.extra_download_audio_check_box = QCheckBox("Run extra download audio")
 		self.advanced_naming_check_box = QCheckBox("Add the additional data to name video?")
 		self.quality_label = QLabel("Choose the video quality:")
 		self.quality_combo_box = QComboBox()
@@ -260,6 +262,11 @@ class SettingsWidget(QWidget):
 		self.download_folder_layout.addWidget(self.choose_download_folder_butt)
 		self.download_folder_group_box.setLayout(self.download_folder_layout)
 
+		self.extra_download_layout = QVBoxLayout()
+		self.extra_download_layout.addWidget(self.extra_download_video_check_box)
+		self.extra_download_layout.addWidget(self.extra_download_audio_check_box)
+		self.extra_download_group_box.setLayout(self.extra_download_layout)
+
 		self.quality_layout = QHBoxLayout()
 		self.quality_layout.addWidget(self.quality_label)
 		self.quality_layout.addWidget(self.quality_combo_box)
@@ -272,6 +279,7 @@ class SettingsWidget(QWidget):
 		self.video_finder_layout = QVBoxLayout()
 		self.video_finder_layout.addWidget(self.enable_logging_check_box)
 		self.video_finder_layout.addWidget(self.download_folder_group_box)
+		self.video_finder_layout.addWidget(self.extra_download_group_box)
 		self.video_finder_layout.addLayout(self.upload_date_layout)
 		self.video_finder_layout.addWidget(self.advanced_naming_check_box)
 		self.video_finder_layout.addLayout(self.quality_layout)
@@ -378,24 +386,11 @@ class DownloadButtWidget(QWidget):
 		self.download_metadata_butt = QPushButton("Save all metadata (JSON)")
 		self.download_video_butt = QPushButton("Download in video format (MP4)")
 		self.download_audio_butt = QPushButton("Download in audio format (MP3)")
-		self.download_video_check_box = QCheckBox("Run in extra-mode")
-		self.download_audio_check_box = QCheckBox("Run in extra-mode")
-
-		self.download_video_check_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Ignored)
-		self.download_audio_check_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Ignored)
-
-		self.download_video_layout = QHBoxLayout()
-		self.download_video_layout.addWidget(self.download_video_check_box)
-		self.download_video_layout.addWidget(self.download_video_butt)
-
-		self.download_audio_layout = QHBoxLayout()
-		self.download_audio_layout.addWidget(self.download_audio_check_box)
-		self.download_audio_layout.addWidget(self.download_audio_butt)
 
 		self.download_butt_layout = QVBoxLayout()
 		self.download_butt_layout.addWidget(self.download_metadata_butt)
-		self.download_butt_layout.addLayout(self.download_video_layout)
-		self.download_butt_layout.addLayout(self.download_audio_layout)
+		self.download_butt_layout.addWidget(self.download_video_butt)
+		self.download_butt_layout.addWidget(self.download_audio_butt)
 
 		###
 
@@ -586,13 +581,12 @@ class NYTDialogWindow(QMainWindow):
 			self.download_progress_bars_widget.unit_progress_bar.setValue(0)
 			if not self.video_metadata_widget.isVisible():
 				self.video_metadata_widget.setVisible(True)
-			if self.download_butt_widget.download_video_check_box.isChecked():
+			if self.settings_widget.extra_download_video_check_box.isChecked():
 				self.download_video_butt_clicked()
-			elif self.download_butt_widget.download_audio_check_box.isChecked():
+			elif self.settings_widget.extra_download_audio_check_box.isChecked():
 				self.download_audio_butt_clicked()
-			if not self.playlist_flag:
-				self.download_butt_widget.download_video_check_box.setEnabled(False)
-				self.download_butt_widget.download_audio_check_box.setEnabled(False)
+			else:
+				self.download_butt_widget.setEnabled(True)
 
 	def loader_updated(self, max_percent, current_percent, message):
 		self.download_progress_bars_widget.unit_progress_bar.setMaximum(max_percent)
@@ -614,8 +608,8 @@ class NYTDialogWindow(QMainWindow):
 			self.download_progress_bars_widget.total_progress_bar.setValue(self.playlist_metadata["counter"])
 			if self.playlist_metadata["counter"] == len(self.playlist_metadata["video"]):
 				self.playlist_flag = False
-				self.download_butt_widget.download_video_check_box.setChecked(False)
-				self.download_butt_widget.download_audio_check_box.setChecked(False)
+				self.settings_widget.extra_download_video_check_box.setChecked(False)
+				self.settings_widget.extra_download_audio_check_box.setChecked(False)
 				self.video_metadata_widget.setVisible(False)
 				self.settings_widget.quality_combo_box.clear()
 				self.settings_widget.quality_combo_box.addItem("unknown")
@@ -624,8 +618,8 @@ class NYTDialogWindow(QMainWindow):
 		else:
 			self.download_progress_bars_widget.total_progress_bar.setMaximum(1)
 			self.download_progress_bars_widget.total_progress_bar.setValue(1)
-			self.download_butt_widget.download_video_check_box.setEnabled(True)
-			self.download_butt_widget.download_audio_check_box.setEnabled(True)
+			self.settings_widget.extra_download_video_check_box.setChecked(False)
+			self.settings_widget.extra_download_audio_check_box.setChecked(False)
 			self.video_metadata_widget.setVisible(False)
 			self.settings_widget.quality_combo_box.clear()
 			self.settings_widget.quality_combo_box.addItem("unknown")
