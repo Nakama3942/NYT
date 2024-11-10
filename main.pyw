@@ -75,13 +75,13 @@ yt_dlp_log.addHandler(status_handler)
 
 # todo
 #  3. Проверить загрузку из других источников (например, твиттера)
-#  4. В настройках логирования добавить выключение логов ffmpeg и реализовать их запись в файл
 #  5. Добавить настройку указания пути к ffmpeg
 #  6. Поработать над интерфейсом программы
 #  7. Провести рефакторинг кода
 #  8. Добавить анимацию ожидания поиска
 #  9. Добавить кнопку загрузки и видео, и аудио вместе
 #  10. Реализовать сохранение настроек
+#  11. реализовать кэш искомых видео
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
@@ -180,17 +180,21 @@ class Loader(QObject):
 	def __ffmpeg_extract_audio(self, filename, enable_logging):
 		command = [
 			"ffmpeg",							# Путь к ffmpeg (если он не в PATH)
+			"-loglevel", "info",				# Уровень логирования для ffmpeg
+			"-hide_banner",						# Скрытие баннера ffmpeg при запуске
 			"-i", filename,						# Входное видео
-			"-vn",								# Опция для указания, что нужно только аудио
-			"-acodec", "libmp3lame",			# Копирование аудио без перекодирования
+			"-vn",								# Опция для указания, что нужно только аудио (без видео)
+			"-acodec", "libmp3lame",			# Кодек для выходного аудио (здесь используется MP3-кодек LAME)
 			"-ab", "192k",						# Установка битрейта аудио
-			filename.replace(".mp4", ".mp3")	# Выходное аудио
+			filename.replace(".mp4", ".mp3")	# Выходное аудио (с заменой расширения на .mp3)
 		]
 		try:
+			result = run(command, check=True, capture_output=True, text=True, encoding="utf-8")
 			if enable_logging:
-				run(command, check=True)
-			else:
-				run(command, capture_output=True, check=True)
+				# Отправляем stdout и stderr в логгер
+				log.info(result.stdout)
+				if result.stderr:
+					log.error(result.stderr)
 			self.__extract_emitter(f"[✓] File {filename} converted successfully")
 		except CalledProcessError as err:
 			log.error(f"[✗] ERROR: File {filename} could not be converted {err}")
@@ -232,6 +236,7 @@ class SettingsWidget(QWidget):
 
 		self.enable_logging_check_box = QGroupBox("Logging")
 		self.enable_yt_dlp_logs_check_box = QCheckBox("Enable YT-DLP logs")
+		self.enable_ffmpeg_logs_check_box = QCheckBox("Enable FFMpeg logs")
 		self.enable_debug_logs_check_box = QCheckBox("Enable DEBUG logs")
 		self.download_folder_group_box = QGroupBox("Download folder")
 		self.download_folder_label = QLineEdit()
@@ -251,6 +256,7 @@ class SettingsWidget(QWidget):
 		self.enable_logging_check_box.setCheckable(True)
 		self.enable_logging_check_box.setChecked(True)
 		self.enable_yt_dlp_logs_check_box.setChecked(True)
+		self.enable_ffmpeg_logs_check_box.setChecked(True)
 		self.download_folder_label.setReadOnly(True)
 		self.download_folder_label.setText(getcwd())
 		self.choose_download_folder_butt.setMaximumWidth(150)
@@ -272,6 +278,7 @@ class SettingsWidget(QWidget):
 
 		self.logging_layout = QHBoxLayout()
 		self.logging_layout.addWidget(self.enable_yt_dlp_logs_check_box)
+		self.logging_layout.addWidget(self.enable_ffmpeg_logs_check_box)
 		self.logging_layout.addWidget(self.enable_debug_logs_check_box)
 		self.enable_logging_check_box.setLayout(self.logging_layout)
 
@@ -777,7 +784,7 @@ class NYTDialogWindow(QMainWindow):
 		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
 		self.loader.submit_extract_audio(
 			file_names,
-			self.settings_widget.enable_logging_check_box.isChecked()
+			self.settings_widget.enable_ffmpeg_logs_check_box.isChecked()
 		)
 
 	def __set_status(self, message):
