@@ -15,7 +15,7 @@
 # https://www.youtube.com/playlist?list=PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM
 
 import sys
-from os import listdir, getcwd, rename, path
+from os import listdir, getcwd, rename, path, getenv
 from subprocess import run, CalledProcessError
 from requests import get
 from datetime import datetime
@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from yt_dlp import YoutubeDL
 import json
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QSpacerItem, QMessageBox, QStatusBar, QFileDialog
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QSpacerItem, QMessageBox, QStatusBar, QFileDialog
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 
@@ -75,7 +75,6 @@ yt_dlp_log.addHandler(status_handler)
 
 # todo
 #  3. Проверить загрузку из других источников (например, твиттера)
-#  5. Добавить настройку указания пути к ffmpeg
 #  6. Поработать над интерфейсом программы
 #  7. Провести рефакторинг кода
 #  8. Добавить анимацию ожидания поиска
@@ -111,8 +110,8 @@ class Loader(QObject):
 		future = self.__executor.submit(self.__download_audio, video_url, video_title)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def submit_extract_audio(self, filenames, enable_logging):
-		future = self.__executor.submit(self.__extract_audio, filenames, enable_logging)
+	def submit_extract_audio(self, filenames, ffmpeg_folder, enable_logging):
+		future = self.__executor.submit(self.__extract_audio, filenames, ffmpeg_folder, enable_logging)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def __get_playlist_metadata(self, playlist_url):
@@ -172,14 +171,14 @@ class Loader(QObject):
 		except Exception as err:
 			log.error(f"[✗] ERROR: Downloading error {err}")
 
-	def __extract_audio(self, filenames, enable_logging):
+	def __extract_audio(self, filenames, ffmpeg_folder, enable_logging):
 		for file in filenames:
-			self.__ffmpeg_extract_audio(file, enable_logging)
+			self.__ffmpeg_extract_audio(ffmpeg_folder, file, enable_logging)
 		log.info(f"[✓] Extraction complete")
 
-	def __ffmpeg_extract_audio(self, filename, enable_logging):
+	def __ffmpeg_extract_audio(self, ffmpeg, filename, enable_logging):
 		command = [
-			"ffmpeg",							# Путь к ffmpeg (если он не в PATH)
+			ffmpeg,								# Путь к ffmpeg (если он не в PATH)
 			"-loglevel", "info",				# Уровень логирования для ffmpeg
 			"-hide_banner",						# Скрытие баннера ffmpeg при запуске
 			"-i", filename,						# Входное видео
@@ -229,6 +228,7 @@ class SettingsWidget(QWidget):
 	enable_yt_dlp_logger_signal = pyqtSignal(bool)
 	enable_debug_logs_signal = pyqtSignal(bool)
 	choose_download_folder_signal = pyqtSignal()
+	choose_ffmpeg_folder_signal = pyqtSignal()
 	other_data_display_signal = pyqtSignal(bool)
 
 	def __init__(self):
@@ -236,11 +236,13 @@ class SettingsWidget(QWidget):
 
 		self.enable_logging_check_box = QGroupBox("Logging")
 		self.enable_yt_dlp_logs_check_box = QCheckBox("Enable YT-DLP logs")
-		self.enable_ffmpeg_logs_check_box = QCheckBox("Enable FFMpeg logs")
+		self.enable_ffmpeg_logs_check_box = QCheckBox("Enable FFmpeg logs")
 		self.enable_debug_logs_check_box = QCheckBox("Enable DEBUG logs")
-		self.download_folder_group_box = QGroupBox("Download folder")
+		self.folders_group_box = QGroupBox("Folders")
 		self.download_folder_label = QLineEdit()
+		self.ffmpeg_folder_label = QLineEdit()
 		self.choose_download_folder_butt = QPushButton("Choose download folder")
+		self.choose_ffmpeg_folder_butt = QPushButton("Choose FFmpeg exe")
 		self.extra_download_group_box = QGroupBox("Extra-mode")
 		self.extra_download_video_check_box = QCheckBox("Run extra download video")
 		self.extra_download_audio_check_box = QCheckBox("Run extra download audio")
@@ -259,6 +261,8 @@ class SettingsWidget(QWidget):
 		self.enable_ffmpeg_logs_check_box.setChecked(True)
 		self.download_folder_label.setReadOnly(True)
 		self.download_folder_label.setText(getcwd())
+		self.ffmpeg_folder_label.setReadOnly(True)
+		self.ffmpeg_folder_label.setText(next((path.join(system_path, "ffmpeg.exe") for system_path in getenv("PATH").split(";") if "ffmpeg" in system_path.lower()), None))
 		self.choose_download_folder_butt.setMaximumWidth(150)
 		self.quality_combo_box.addItems(["unknown"])
 		self.other_data_display_check_box.setCheckable(True)
@@ -274,6 +278,7 @@ class SettingsWidget(QWidget):
 		self.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logger_check_box_state_changed)
 		self.enable_debug_logs_check_box.stateChanged.connect(self.enable_debug_logs_check_box_state_changed)
 		self.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
+		self.choose_ffmpeg_folder_butt.clicked.connect(self.choose_ffmpeg_folder_butt_clicked)
 		self.other_data_display_check_box.toggled.connect(self.other_data_display_check_box_toggled)
 
 		self.logging_layout = QHBoxLayout()
@@ -282,10 +287,12 @@ class SettingsWidget(QWidget):
 		self.logging_layout.addWidget(self.enable_debug_logs_check_box)
 		self.enable_logging_check_box.setLayout(self.logging_layout)
 
-		self.download_folder_layout = QHBoxLayout()
-		self.download_folder_layout.addWidget(self.download_folder_label)
-		self.download_folder_layout.addWidget(self.choose_download_folder_butt)
-		self.download_folder_group_box.setLayout(self.download_folder_layout)
+		self.folders_layout = QGridLayout()
+		self.folders_layout.addWidget(self.download_folder_label, 0, 0)
+		self.folders_layout.addWidget(self.choose_download_folder_butt, 0, 1)
+		self.folders_layout.addWidget(self.ffmpeg_folder_label, 1, 0)
+		self.folders_layout.addWidget(self.choose_ffmpeg_folder_butt, 1, 1)
+		self.folders_group_box.setLayout(self.folders_layout)
 
 		self.extra_download_layout = QVBoxLayout()
 		self.extra_download_layout.addWidget(self.extra_download_video_check_box)
@@ -305,7 +312,7 @@ class SettingsWidget(QWidget):
 
 		self.video_finder_layout = QVBoxLayout()
 		self.video_finder_layout.addWidget(self.enable_logging_check_box)
-		self.video_finder_layout.addWidget(self.download_folder_group_box)
+		self.video_finder_layout.addWidget(self.folders_group_box)
 		self.video_finder_layout.addWidget(self.extra_download_group_box)
 		self.video_finder_layout.addWidget(self.other_data_display_check_box)
 		self.video_finder_layout.addWidget(self.advanced_naming_check_box)
@@ -362,6 +369,15 @@ class SettingsWidget(QWidget):
 		self.download_folder_label.setText(QFileDialog.getExistingDirectory(self, "Select download directory"))
 		self.choose_download_folder_signal.emit()
 		log.debug("Download directory is changed")
+
+	def choose_ffmpeg_folder_butt_clicked(self):
+		ffmpeg_path, _ = QFileDialog.getOpenFileName(self, "Select ffmpeg executable", ".", "App (*.exe)")
+		if ffmpeg_path.split("/")[-1] == "ffmpeg.exe":
+			self.ffmpeg_folder_label.setText(ffmpeg_path)
+			self.choose_ffmpeg_folder_signal.emit()
+			log.debug("FFmpeg directory is changed")
+		else:
+			log.error("This program is not FFmpeg")
 
 	def other_data_display_check_box_toggled(self, state):
 		self.date_format_combo_box.setEnabled(state)
@@ -782,10 +798,14 @@ class NYTDialogWindow(QMainWindow):
 	def __run_extract_audio(self, file_names):
 		self.extract_audio_butt_widget.extract_progress_bar.setMaximum(len(file_names))
 		self.extract_audio_butt_widget.extract_progress_bar.setValue(0)
-		self.loader.submit_extract_audio(
-			file_names,
-			self.settings_widget.enable_ffmpeg_logs_check_box.isChecked()
-		)
+		if self.settings_widget.ffmpeg_folder_label.text() != "":
+			self.loader.submit_extract_audio(
+				file_names,
+				self.settings_widget.ffmpeg_folder_label.text(),
+				self.settings_widget.enable_ffmpeg_logs_check_box.isChecked()
+			)
+		else:
+			log.error("FFmpeg not found")
 
 	def __set_status(self, message):
 		self.status_bar.showMessage(message)
