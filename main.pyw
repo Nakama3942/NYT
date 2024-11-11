@@ -21,6 +21,8 @@ from requests import get
 from datetime import datetime
 import logging
 import re
+import pickle
+from copy import deepcopy
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -50,7 +52,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(level
 console_handler.setLevel(logging.DEBUG)
 
 # Обработчик для записи в файл
-file_handler = logging.FileHandler('NYT.log', encoding='utf-8')
+file_handler = logging.FileHandler('nyt.log', encoding='utf-8')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 file_handler.setLevel(logging.INFO)
 
@@ -80,7 +82,6 @@ yt_dlp_log.addHandler(status_handler)
 #  8. Добавить анимацию ожидания поиска
 #  9. Добавить кнопку загрузки и видео, и аудио вместе
 #  10. Реализовать сохранение настроек
-#  11. реализовать кэш искомых видео
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
@@ -544,6 +545,14 @@ class NYTDialogWindow(QMainWindow):
 		self.standard_quality = 144
 		status_handler.log_signal.connect(self.__set_status)
 
+		try:
+			with open("nyt.cache", "rb") as cache_file:
+				self.cache = json.loads(pickle.load(cache_file))
+		except FileNotFoundError:
+			with open("nyt.cache", "wb") as cache_file:
+				self.cache = {}
+				pickle.dump(json.dumps(self.cache), cache_file)
+
 		#####
 
 		self.settings_widget = SettingsWidget()
@@ -654,14 +663,18 @@ class NYTDialogWindow(QMainWindow):
 		log.debug("Initialization finished")
 		log.info("The program has been launched")
 
-	def loader_founded(self, metadata):
+	def loader_founded(self, metadata: dict):
+		if not metadata["id"] in self.cache.keys():
+			self.cache[metadata["id"]] = deepcopy(metadata)
+
 		if "_type" in metadata and metadata["_type"] == "playlist":
 			log.debug("Playlist metadata was intercepted")
 			self.playlist_metadata = {"video": [entry['id'] for entry in metadata['entries']], "counter": 0}
 			self.download_progress_bars_widget.total_progress_bar.setMaximum(len(self.playlist_metadata["video"]))
 			self.download_progress_bars_widget.total_progress_bar.setValue(0)
 			self.download_progress_bars_widget.unit_progress_bar.setValue(0)
-			self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+			self.video_searcher_widget.url_line_edit.setText(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+			self.find_video_butt_clicked()
 		else:
 			log.debug("Video metadata was intercepted")
 			self.video_metadata = metadata
@@ -714,7 +727,8 @@ class NYTDialogWindow(QMainWindow):
 				self.settings_widget.quality_combo_box.clear()
 				self.settings_widget.quality_combo_box.addItem("unknown")
 			else:
-				self.loader.submit_find_video(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+				self.video_searcher_widget.url_line_edit.setText(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+				self.find_video_butt_clicked()
 		else:
 			self.settings_widget.extra_download_video_check_box.setChecked(False)
 			self.settings_widget.extra_download_audio_check_box.setChecked(False)
@@ -735,14 +749,20 @@ class NYTDialogWindow(QMainWindow):
 
 	def find_video_butt_clicked(self):
 		if self.__analyze_link():
-			if self.playlist_flag:
-				self.loader.submit_find_playlist(
-					self.video_searcher_widget.url_line_edit.text()
-				)
+			if self.video_searcher_widget.url_line_edit.text() in self.cache.keys():
+				log.debug("Loaded cached data")
+				self.loader_founded(self.cache[self.video_searcher_widget.url_line_edit.text()])
 			else:
-				self.loader.submit_find_video(
-					self.video_searcher_widget.url_line_edit.text()
-				)
+				if self.playlist_flag:
+					log.debug(self.video_searcher_widget.url_line_edit.text())
+					self.loader.submit_find_playlist(
+						self.video_searcher_widget.url_line_edit.text()
+					)
+				else:
+					log.debug(self.video_searcher_widget.url_line_edit.text())
+					self.loader.submit_find_video(
+						self.video_searcher_widget.url_line_edit.text()
+					)
 
 	def download_metadata_butt_clicked(self):
 		with open(f"{self.video_metadata_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
@@ -834,7 +854,8 @@ class NYTDialogWindow(QMainWindow):
 
 		else:
 			log.info("Entered video/playlist ID")
-			self.playlist_flag = False if len(self.video_searcher_widget.url_line_edit.text()) < 20 else True
+			if len(self.video_searcher_widget.url_line_edit.text()) > 20:
+				self.playlist_flag = True
 			return True
 
 	def __insert_video_metadata(self):
@@ -896,6 +917,9 @@ class NYTDialogWindow(QMainWindow):
 		log.debug("Video metadata was setted")
 
 	def closeEvent(self, event):
+		with open("nyt.cache", "wb") as cache_file:
+			pickle.dump(json.dumps(self.cache), cache_file)
+
 		log.info("The program is closed")
 		super().closeEvent(event)
 
