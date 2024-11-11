@@ -80,7 +80,6 @@ yt_dlp_log.addHandler(status_handler)
 #  6. Поработать над интерфейсом программы
 #  7. Провести рефакторинг кода
 #  8. Добавить анимацию ожидания поиска
-#  9. Добавить кнопку загрузки и видео, и аудио вместе
 #  10. Реализовать сохранение настроек
 
 class Loader(QObject):
@@ -104,15 +103,19 @@ class Loader(QObject):
 		future.add_done_callback(self.__internal_done_callback)
 
 	def submit_download_video(self, video_url, video_title, video_format):
-		future = self.__executor.submit(self.__download_video, video_url, video_title, video_format)
+		future = self.__executor.submit(self.__download_video_wrapper, video_url, video_title, video_format)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def submit_download_audio(self, video_url, video_title):
-		future = self.__executor.submit(self.__download_audio, video_url, video_title)
+		future = self.__executor.submit(self.__download_audio_wrapper, video_url, video_title)
+		future.add_done_callback(self.__internal_done_callback)
+
+	def submit_download_va(self, video_url, video_title, video_format):
+		future = self.__executor.submit(self.__download_va_wrapper, video_url, video_title, video_format)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def submit_extract_audio(self, filenames, ffmpeg_folder, enable_logging):
-		future = self.__executor.submit(self.__extract_audio, filenames, ffmpeg_folder, enable_logging)
+		future = self.__executor.submit(self.__extract_audio_wrapper, filenames, ffmpeg_folder, enable_logging)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def __get_playlist_metadata(self, playlist_url):
@@ -132,8 +135,43 @@ class Loader(QObject):
 		with YoutubeDL(ydl_opts) as ydl:
 			self.__found_emitter(ydl.extract_info(video_url, download=False))  # Только извлекает информацию
 
+	def __download_video_wrapper(self, video_url, video_title, video_format):
+		self.__start_download_emitter()
+		try:
+			log.info("Starting download")
+			self.__download_video(video_url, video_title, video_format)
+			log.info("[+] Video from playlist has been downloaded")
+			self.__finish_download_emitter()
+		except Exception as err:
+			log.error(f"[✗] ERROR: Downloading error {err}")
+
+	def __download_audio_wrapper(self, video_url, video_title):
+		self.__start_download_emitter()
+		try:
+			log.info("Starting download")
+			self.__download_audio(video_url, video_title)
+			log.info("[+] Video from playlist has been downloaded")
+			self.__finish_download_emitter()
+		except Exception as err:
+			log.error(f"[✗] ERROR: Downloading error {err}")
+
+	def __download_va_wrapper(self, video_url, video_title, video_format):
+		self.__start_download_emitter()
+		try:
+			log.info("Starting download")
+			self.__download_video(video_url, video_title, video_format)
+			self.__download_audio(video_url, video_title)
+			log.info("[+] Video from playlist has been downloaded")
+			self.__finish_download_emitter()
+		except Exception as err:
+			log.error(f"[✗] ERROR: Downloading error {err}")
+
+	def __extract_audio_wrapper(self, filenames, ffmpeg_folder, enable_logging):
+		for file in filenames:
+			self.__ffmpeg_extract_audio(ffmpeg_folder, file, enable_logging)
+		log.info(f"[✓] Extraction complete")
+
 	def __download_video(self, video_url, video_title, video_format):
-		self.__start_download_emitter("Starting download")
 		ydl_opts = {
 			"format": f"{video_format}+ba[ext=m4a]",
 			"quiet": False,
@@ -141,41 +179,24 @@ class Loader(QObject):
 			"progress_hooks": [self.__update_emitter],
 			"logger": yt_dlp_log
 		}
-		try:
-			with YoutubeDL(ydl_opts) as ydl:
-				ydl.download([video_url])
-				self.__finish_download_emitter("[+] Video from playlist has been downloaded")
-		except Exception as err:
-			log.error(f"[✗] ERROR: Downloading error {err}")
+		with YoutubeDL(ydl_opts) as ydl:
+			ydl.download([video_url])
 
 	def __download_audio(self, video_url, video_title):
-		self.__start_download_emitter("Starting download")
 		ydl_opts = {
-			"format": "bestaudio/best",
+			"format": "ba[ext=m4a]",
 			"quiet": False,
 			"outtmpl": video_title,
 			"progress_hooks": [self.__update_emitter],
 			"logger": yt_dlp_log,
-			"extract_audio": True,
-			"audio-format": "mp3",
-			"write-thumbnail": True,
 			"postprocessors": [{
 				"key": "FFmpegExtractAudio",
 				"preferredcodec": "mp3",
 				"preferredquality": "192",
-			}],
+			}]
 		}
-		try:
-			with YoutubeDL(ydl_opts) as ydl:
-				ydl.download([video_url])
-				self.__finish_download_emitter("[+] Audio from playlist has been downloaded")
-		except Exception as err:
-			log.error(f"[✗] ERROR: Downloading error {err}")
-
-	def __extract_audio(self, filenames, ffmpeg_folder, enable_logging):
-		for file in filenames:
-			self.__ffmpeg_extract_audio(ffmpeg_folder, file, enable_logging)
-		log.info(f"[✓] Extraction complete")
+		with YoutubeDL(ydl_opts) as ydl:
+			ydl.download([video_url])
 
 	def __ffmpeg_extract_audio(self, ffmpeg, filename, enable_logging):
 		command = [
@@ -484,11 +505,13 @@ class DownloadButtWidget(QWidget):
 		self.download_metadata_butt = QPushButton("Save all metadata (JSON)")
 		self.download_video_butt = QPushButton("Download in video format (MP4)")
 		self.download_audio_butt = QPushButton("Download in audio format (MP3)")
+		self.download_all_butt = QPushButton("Download in all format (MP4+MP3)")
 
 		self.download_butt_layout = QVBoxLayout()
 		self.download_butt_layout.addWidget(self.download_metadata_butt)
 		self.download_butt_layout.addWidget(self.download_video_butt)
 		self.download_butt_layout.addWidget(self.download_audio_butt)
+		self.download_butt_layout.addWidget(self.download_all_butt)
 
 		###
 
@@ -610,6 +633,7 @@ class NYTDialogWindow(QMainWindow):
 		self.download_butt_widget.download_metadata_butt.clicked.connect(self.download_metadata_butt_clicked)
 		self.download_butt_widget.download_video_butt.clicked.connect(self.download_video_butt_clicked)
 		self.download_butt_widget.download_audio_butt.clicked.connect(self.download_audio_butt_clicked)
+		self.download_butt_widget.download_all_butt.clicked.connect(self.download_all_butt_clicked)
 
 		self.download_layout = QVBoxLayout()
 		self.download_layout.addWidget(self.download_butt_widget)
@@ -665,7 +689,7 @@ class NYTDialogWindow(QMainWindow):
 
 	def loader_founded(self, metadata: dict):
 		if not metadata["id"] in self.cache.keys():
-			self.cache[metadata["id"]] = deepcopy(metadata)
+			self.cache[metadata["id"]] = metadata
 
 		if "_type" in metadata and metadata["_type"] == "playlist":
 			log.debug("Playlist metadata was intercepted")
@@ -677,7 +701,7 @@ class NYTDialogWindow(QMainWindow):
 			self.find_video_butt_clicked()
 		else:
 			log.debug("Video metadata was intercepted")
-			self.video_metadata = metadata
+			self.video_metadata = deepcopy(metadata)
 			resolutions = sorted(
 				set(
 					fmt["format_note"] for fmt in self.video_metadata["formats"]
@@ -786,6 +810,16 @@ class NYTDialogWindow(QMainWindow):
 		self.loader.submit_download_audio(
 			self.video_metadata["id"],
 			formatted_video_name
+		)
+
+	def download_all_butt_clicked(self):
+		formatted_video_name = f"{self.settings_widget.download_folder_label.text()}/"
+		formatted_video_name += f"[%(id)s] - {self.video_metadata_widget.title_label.text()} - %(uploader)s - %(resolution)s - %(playlist)s - %(playlist_index)s.%(ext)s" if self.settings_widget.advanced_naming_check_box.isChecked() else f"{self.video_metadata_widget.title_label.text()}.%(ext)s"
+		log.debug(f"Starting saved video and audio file '{formatted_video_name}'")
+		self.loader.submit_download_va(
+			self.video_metadata["id"],
+			formatted_video_name,
+			[fmt["format_id"] for fmt in self.video_metadata["formats"] if fmt.get("format_note") == self.settings_widget.quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0]
 		)
 
 	def extract_specified_audio_butt_clicked(self):
