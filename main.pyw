@@ -31,7 +31,7 @@ import json
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QPalette
+from PyQt6.QtGui import QPixmap, QIcon
 
 from qdarktheme import setup_theme, get_themes
 
@@ -39,9 +39,12 @@ description = """Author: Kalynovsky Valentin<br>
 Nickname: Nakama 【仲間】<br>
 Source: <a href='https://github.com/Nakama3942/NYT'>NYT</a> GitHub repository<br>
 <br>
+License: <a href='http://www.apache.org/licenses/LICENSE-2.0'>Apache License 2.0</a><br>
+Copyright © 2024 Kalynovsky Valentin. All rights reserved.<br>
+<br>
 This program is written to download videos from YouTube, download audio from youtube videos, and extract audio from existing videos.<br>
 <br>
-The program is a graphical wrapper over the YT-DLP program.<br>
+The program is a graphical wrapper over the <a href='https://pypi.org/project/yt-dlp/'><i>YT-DLP</i></a> program.<br>
 <br>
 I will be glad if my program helps someone."""
 
@@ -112,10 +115,10 @@ yt_dlp_log.addHandler(file_handler)
 yt_dlp_log.addHandler(status_handler)
 
 # todo
-#  4. Добавить анимацию ожидания поиска
-#  5. Реализовать сохранение настроек
-#  6. Проверить загрузку из других источников (например, твиттера)
-#  7. Провести рефакторинг кода
+#  1. Реализовать центрирование окна
+#  2. Реализовать сохранение настроек
+#  3. Проверить загрузку из других источников (например, твиттера)
+#  4. Провести рефакторинг кода
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
@@ -333,6 +336,15 @@ class SettingsWidget(QWidget):
 		self.audio_quality_label = QLabel("Audio:")
 		self.audio_quality_combo_box = QComboBox()
 		self.audio_quality_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+		response = get("https://raw.githubusercontent.com/Nakama3942/NYT/3448ba0653bfeabfadfd8a7d9ce7b2836df36e91/icons/colorize_24dp.svg")
+		if response.status_code == 200:
+			pixmap = QPixmap()
+			pixmap.loadFromData(response.content)
+			pixmap = pixmap.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio)
+			self.color_dialog_butt.setIcon(QIcon(pixmap))
+		else:
+			log.warning("Image loading failed")
 
 		self.title_bar_combo_box.addItems(["Custom title bar", "System title bar"])
 		self.appearance_combo_box.addItems(tuple(theme.capitalize() for theme in get_themes()))
@@ -878,7 +890,7 @@ class NYTDialogWindow(QMainWindow):
 
 		self.__init_about_screen()
 
-		self.__set_title_bar_name("NYT: © 2024 Kalynovsky Valentin")
+		self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
 		self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 		self.setCentralWidget(self.central_widget)
 		self.setStatusBar(self.status_bar)
@@ -900,6 +912,7 @@ class NYTDialogWindow(QMainWindow):
 		log.info("The program has been launched")
 
 	def loader_founded(self, metadata: dict):
+		self.download_progress_bars_widget.unit_progress_bar.setRange(0, 100)
 		if not metadata["id"] in self.cache.keys():
 			self.cache[metadata["id"]] = metadata
 
@@ -971,7 +984,7 @@ class NYTDialogWindow(QMainWindow):
 		self.video_searcher_widget.setVisible(True)
 
 		def clear_window():
-			self.__set_title_bar_name("NYT: © 2024 Kalynovsky Valentin")
+			self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
 			self.settings_widget.extra_download_video_check_box.setChecked(False)
 			self.settings_widget.extra_download_audio_check_box.setChecked(False)
 			self.settings_widget.extra_download_va_check_box.setChecked(False)
@@ -998,7 +1011,8 @@ class NYTDialogWindow(QMainWindow):
 
 	def title_bar_combo_box_current_text_changed(self, new_text):
 		if new_text == "Custom title bar":
-			self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+			self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+			# self.central_widget.setStyleSheet("border: 1px solid #ccc; border-radius: 15px;")  # Funny Easter egg
 			self.title_bar.setVisible(True)
 		else:
 			self.setWindowFlags(Qt.WindowType.Window)
@@ -1011,6 +1025,8 @@ class NYTDialogWindow(QMainWindow):
 			self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][new_text])
 
 	def find_video_butt_clicked(self):
+		self.download_progress_bars_widget.unit_progress_bar.setRange(0, 0)
+		self.download_progress_bars_widget.unit_progress_bar.setValue(0)
 		if self.__analyze_link():
 			if self.video_searcher_widget.url_line_edit.text() in self.cache.keys():
 				log.debug("Loaded cached data")
@@ -1248,6 +1264,15 @@ class NYTDialogWindow(QMainWindow):
 		self.video_metadata_widget.uploader_label.setText(f"<a href='{self.video_metadata['channel_url']}'>{self.video_metadata['uploader']}</a> ({self.video_metadata['channel_follower_count']} subscribes)")
 
 		log.debug("Video metadata was setted")
+
+	# def show(self):
+	# 	# Set window to center
+	# 	qr = self.frameGeometry()
+	# 	qr.moveCenter(self.screen().availableGeometry().center())
+	# 	self.move(qr.topLeft())
+	# 	# IMPORTANT_DATA.window_height = self.height()
+	# 	# IMPORTANT_DATA.window_width = self.width()
+	# 	super().show()
 
 	def closeEvent(self, event):
 		with open("nyt.cache", "wb") as cache_file:
