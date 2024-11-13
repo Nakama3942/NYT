@@ -29,11 +29,45 @@ from concurrent.futures import ThreadPoolExecutor
 from yt_dlp import YoutubeDL
 import json
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPalette
 
 from qdarktheme import setup_theme, get_themes
+
+description = """Author: Kalynovsky Valentin<br>
+Nickname: Nakama 【仲間】<br>
+Source: <a href='https://github.com/Nakama3942/NYT'>NYT</a> GitHub repository<br>
+<br>
+This program is written to download videos from YouTube, download audio from youtube videos, and extract audio from existing videos.<br>
+<br>
+The program is a graphical wrapper over the YT-DLP program.<br>
+<br>
+I will be glad if my program helps someone."""
+
+def custom_but_qss_preparing(rgb_color):
+	return f"""
+		/* Обычное состояние */
+		QPushButton {{
+			background-color: rgba({rgb_color[0]}, {rgb_color[1]}, {rgb_color[2]}, 0.4);
+			color: #fff;
+			border: 0px;
+			border-radius: 10px;
+			font-size: 16px;
+		}}
+
+		/* Состояние при наведении */
+		QPushButton:hover {{
+			background-color: rgba({rgb_color[0]}, {rgb_color[1]}, {rgb_color[2]}, 0.9);
+			color: #000;
+		}}
+
+		/* Состояние при нажатии */
+		QPushButton:pressed {{
+			background-color: rgba({rgb_color[0]}, {rgb_color[1]}, {rgb_color[2]}, 0.8);
+			color: #000;
+		}}
+	"""
 
 # Кастомный обработчик логов для передачи сигналов
 class LogSignalEmitter(logging.Handler, QObject):
@@ -78,9 +112,6 @@ yt_dlp_log.addHandler(file_handler)
 yt_dlp_log.addHandler(status_handler)
 
 # todo
-#  1. Завершить верхнюю панель
-#  2. Добавить настройку смены заголовка программы между системным и кастомным
-#  3. Добавить информацию о программе и авторе
 #  4. Добавить анимацию ожидания поиска
 #  5. Реализовать сохранение настроек
 #  6. Проверить загрузку из других источников (например, твиттера)
@@ -262,6 +293,7 @@ class SettingsWidget(QWidget):
 		super(SettingsWidget, self).__init__()
 
 		self.theme_group_box = QGroupBox("Theme")
+		self.title_bar_combo_box = QComboBox()
 		self.appearance_combo_box = QComboBox()
 		self.color_dialog_butt = QPushButton()
 		self.blue_color_butt = QPushButton()
@@ -302,25 +334,26 @@ class SettingsWidget(QWidget):
 		self.audio_quality_combo_box = QComboBox()
 		self.audio_quality_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
-		self.appearance_combo_box.addItems(get_themes())
-		self.color_dialog_butt.setFixedSize(30, 30)
-		self.blue_color_butt.setFixedSize(30, 30)
-		self.purple_color_butt.setFixedSize(30, 30)
-		self.pink_color_butt.setFixedSize(30, 30)
-		self.red_color_butt.setFixedSize(30, 30)
-		self.orange_color_butt.setFixedSize(30, 30)
-		self.yellow_color_butt.setFixedSize(30, 30)
-		self.green_color_butt.setFixedSize(30, 30)
-		self.graphite_color_butt.setFixedSize(30, 30)
-		self.color_dialog_butt.setStyleSheet("""background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF0000, stop:0.15 #FF7F00, stop:0.33 #FFFF00, stop:0.49 #00FF00, stop:0.67 #0000FF, stop:0.84 #4B0082, stop:1 #8B00FF); border-radius: 15px; padding: 8px 8px;""")
-		self.blue_color_butt.setStyleSheet("""background-color: '#007BFF'; border-radius: 15px; padding: 8px 8px;""")
-		self.purple_color_butt.setStyleSheet("""background-color: '#5856D6'; border-radius: 15px; padding: 8px 8px;""")
-		self.pink_color_butt.setStyleSheet("""background-color: '#FF2D55'; border-radius: 15px; padding: 8px 8px;""")
-		self.red_color_butt.setStyleSheet("""background-color: '#FF3B30'; border-radius: 15px; padding: 8px 8px;""")
-		self.orange_color_butt.setStyleSheet("""background-color: '#FF9500'; border-radius: 15px; padding: 8px 8px;""")
-		self.yellow_color_butt.setStyleSheet("""background-color: '#FFCC00'; border-radius: 15px; padding: 8px 8px;""")
-		self.green_color_butt.setStyleSheet("""background-color: '#34C759'; border-radius: 15px; padding: 8px 8px;""")
-		self.graphite_color_butt.setStyleSheet("""background-color: '#808080'; border-radius: 15px; padding: 8px 8px;""")
+		self.title_bar_combo_box.addItems(["Custom title bar", "System title bar"])
+		self.appearance_combo_box.addItems(tuple(theme.capitalize() for theme in get_themes()))
+		self.color_dialog_butt.setMaximumHeight(25)
+		self.blue_color_butt.setMaximumHeight(25)
+		self.purple_color_butt.setMaximumHeight(25)
+		self.pink_color_butt.setMaximumHeight(25)
+		self.red_color_butt.setMaximumHeight(25)
+		self.orange_color_butt.setMaximumHeight(25)
+		self.yellow_color_butt.setMaximumHeight(25)
+		self.green_color_butt.setMaximumHeight(25)
+		self.graphite_color_butt.setMaximumHeight(25)
+		self.color_dialog_butt.setStyleSheet(custom_but_qss_preparing([200, 200, 200]))
+		self.blue_color_butt.setStyleSheet(custom_but_qss_preparing([0, 123, 255]))
+		self.purple_color_butt.setStyleSheet(custom_but_qss_preparing([88, 86, 214]))
+		self.pink_color_butt.setStyleSheet(custom_but_qss_preparing([255, 45, 85]))
+		self.red_color_butt.setStyleSheet(custom_but_qss_preparing([255, 59, 48]))
+		self.orange_color_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
+		self.yellow_color_butt.setStyleSheet(custom_but_qss_preparing([255, 204, 0]))
+		self.green_color_butt.setStyleSheet(custom_but_qss_preparing([52, 199, 89]))
+		self.graphite_color_butt.setStyleSheet(custom_but_qss_preparing([128, 128, 128]))
 		self.enable_logging_group_box.setCheckable(True)
 		self.enable_logging_group_box.setChecked(True)
 		self.enable_yt_dlp_logs_check_box.setChecked(True)
@@ -344,8 +377,8 @@ class SettingsWidget(QWidget):
 
 		self.appearance_combo_box.currentTextChanged.connect(self.appearance_combo_box_text_changed)
 		self.color_dialog_butt.clicked.connect(self.color_dialog_butt_clicked)
-		self.blue_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#5856D6"))
-		self.purple_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#007BFF"))
+		self.blue_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#007BFF"))
+		self.purple_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#5856D6"))
 		self.pink_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#FF2D55"))
 		self.red_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#FF3B30"))
 		self.orange_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#FF9500"))
@@ -370,6 +403,7 @@ class SettingsWidget(QWidget):
 		self.color_butt_layout.addWidget(self.graphite_color_butt)
 
 		self.theme_layout = QVBoxLayout()
+		self.theme_layout.addWidget(self.title_bar_combo_box)
 		self.theme_layout.addWidget(self.appearance_combo_box)
 		self.theme_layout.addLayout(self.color_butt_layout)
 		self.theme_group_box.setLayout(self.theme_layout)
@@ -430,17 +464,17 @@ class SettingsWidget(QWidget):
 		self.setLayout(self.video_finder_layout)
 
 	def appearance_combo_box_text_changed(self, new_theme):
-		setup_theme(theme=new_theme, custom_colors={"primary": self.color})
+		setup_theme(theme=new_theme.lower(), custom_colors={"primary": self.color})
 
 	def color_dialog_butt_clicked(self):
 		q_color = QColorDialog.getColor()
 		if q_color.isValid():
 			self.color = q_color.name()
-			setup_theme(theme=self.appearance_combo_box.currentText(), custom_colors={"primary": self.color})
+			setup_theme(theme=self.appearance_combo_box.currentText().lower(), custom_colors={"primary": self.color})
 
 	def accent_color_butt_clicked(self, color):
 		self.color = color
-		setup_theme(theme=self.appearance_combo_box.currentText(), custom_colors={"primary": color})
+		setup_theme(theme=self.appearance_combo_box.currentText().lower(), custom_colors={"primary": color})
 
 	def enable_logging_check_box_toggled(self, state):
 		if state:
@@ -520,7 +554,7 @@ class VideoDataWidget(QWidget):
 
 		self.thumbnail_label = QLabel()
 		self.title_label = QLineEdit()
-		self.description_label = QPlainTextEdit()
+		self.description_label = QTextBrowser()
 		self.duration_string_icon = QLabel()
 		self.duration_string_label = QLabel()
 		self.upload_date_icon = QLabel()
@@ -531,10 +565,12 @@ class VideoDataWidget(QWidget):
 		self.like_count_label = QLabel()
 		self.uploader_icon = QLabel()
 		self.uploader_label = QLabel()
+		self.other_data_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
 		self.thumbnail_label.setFixedSize(480, 270)
+		self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 		self.title_label.setMinimumWidth(400)
-		self.description_label.setReadOnly(True)
+		self.description_label.setOpenExternalLinks(True)
 		self.uploader_label.setOpenExternalLinks(True)  # Открытие ссылок в браузере
 		self.uploader_label.setTextFormat(Qt.TextFormat.RichText)  # Поддержка HTML
 		self.uploader_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)  # Включаем интерактивность
@@ -562,6 +598,7 @@ class VideoDataWidget(QWidget):
 		self.video_other_data_layout.addWidget(self.like_count_label, 2, 3)
 		self.video_other_data_layout.addWidget(self.uploader_icon, 3, 0)
 		self.video_other_data_layout.addWidget(self.uploader_label, 3, 1)
+		self.video_other_data_layout.addItem(self.other_data_spacer, 4, 0)
 		self.video_other_data_widget = QWidget()
 		self.video_other_data_widget.setLayout(self.video_other_data_layout)
 
@@ -579,7 +616,7 @@ class VideoDataWidget(QWidget):
 
 		self.setLayout(self.video_data_layout)
 
-	def __set_pixmap_content(self, pixmap_container, link):
+	def __set_pixmap_content(self, pixmap_container: QLabel, link):
 		response = get(link)
 		if response.status_code == 200:
 			pixmap = QPixmap()
@@ -674,13 +711,22 @@ class TitleBarWidget(QWidget):
 
 		self.parent = parent
 
-		self.program_name = QLineEdit("NYT")
-		self.exit_butt = QPushButton("X")
+		self.program_name = QLineEdit("NYT: © 2024 Kalynovsky Valentin")
+		self.exit_butt = QPushButton("✗")
 
 		self.program_name.setEnabled(False)
+		self.program_name.setStyleSheet("""
+			QLineEdit {
+				background-color: rgba(63, 64, 66, 0.4);
+				color: #fff;
+				border: 0px;
+				border-radius: 10px;
+				font-size: 16px;
+			}
+		""")
 		self.program_name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-		self.exit_butt.setFixedSize(30, 30)
-		self.exit_butt.setStyleSheet("""background-color: '#FF3B30'; color: '#000'; border-radius: 15px; padding: 8px 8px;""")
+		self.exit_butt.setFixedSize(40, 30)
+		self.exit_butt.setStyleSheet(custom_but_qss_preparing([255, 59, 48]))
 		self.exit_butt.clicked.connect(self.exit_butt_clicked)
 
 		# Перенаправление событий мыши с вложенного виджета в заголовок
@@ -741,6 +787,7 @@ class NYTDialogWindow(QMainWindow):
 		self.settings_widget = SettingsWidget()
 		self.settings_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
+		self.settings_widget.title_bar_combo_box.currentTextChanged.connect(self.title_bar_combo_box_current_text_changed)
 		self.settings_widget.date_format_combo_box.currentTextChanged.connect(self.date_format_combo_box_current_text_changed)
 
 		self.settings_group_box_layout = QVBoxLayout()
@@ -770,14 +817,13 @@ class NYTDialogWindow(QMainWindow):
 
 		self.video_searcher_widget = VideoSearcherWidget()
 		self.video_metadata_widget = VideoDataWidget()
-		self.video_metadata_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
 		self.video_searcher_widget.find_video_butt.clicked.connect(self.find_video_butt_clicked)
+		self.video_metadata_widget.title_label.textChanged.connect(self.title_label_text_changed)
 
 		self.video_metadata_layout = QVBoxLayout()
 		self.video_metadata_layout.addWidget(self.video_searcher_widget)
 		self.video_metadata_layout.addWidget(self.video_metadata_widget)
-		self.video_metadata_layout.addSpacerItem(self.video_metadata_spacer)
 
 		self.video_metadata_group_box = QGroupBox("Video")
 		self.video_metadata_group_box.setLayout(self.video_metadata_layout)
@@ -832,11 +878,10 @@ class NYTDialogWindow(QMainWindow):
 
 		self.__init_about_screen()
 
-		self.setWindowTitle("NYT Window")
-		self.setWindowFlags(Qt.WindowType.FramelessWindowHint)  # CustomizeWindowHint
+		self.__set_title_bar_name("NYT: © 2024 Kalynovsky Valentin")
+		self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 		self.setCentralWidget(self.central_widget)
 		self.setStatusBar(self.status_bar)
-		# self.setMinimumSize(600, 480)
 
 		log.debug("Interface was initialized")
 
@@ -926,6 +971,7 @@ class NYTDialogWindow(QMainWindow):
 		self.video_searcher_widget.setVisible(True)
 
 		def clear_window():
+			self.__set_title_bar_name("NYT: © 2024 Kalynovsky Valentin")
 			self.settings_widget.extra_download_video_check_box.setChecked(False)
 			self.settings_widget.extra_download_audio_check_box.setChecked(False)
 			self.settings_widget.extra_download_va_check_box.setChecked(False)
@@ -950,9 +996,19 @@ class NYTDialogWindow(QMainWindow):
 		else:
 			clear_window()
 
-	def date_format_combo_box_current_text_changed(self, state):
+	def title_bar_combo_box_current_text_changed(self, new_text):
+		if new_text == "Custom title bar":
+			self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+			self.title_bar.setVisible(True)
+		else:
+			self.setWindowFlags(Qt.WindowType.Window)
+			self.title_bar.setVisible(False)
+
+		self.show()
+
+	def date_format_combo_box_current_text_changed(self, new_text):
 		if self.video_metadata_widget.upload_date_label.text():
-			self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][state])
+			self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][new_text])
 
 	def find_video_butt_clicked(self):
 		if self.__analyze_link():
@@ -970,6 +1026,9 @@ class NYTDialogWindow(QMainWindow):
 					self.loader.submit_find_video(
 						self.video_searcher_widget.url_line_edit.text()
 					)
+
+	def title_label_text_changed(self):
+		self.__set_title_bar_name(self.video_metadata_widget.title_label.text())
 
 	def download_metadata_butt_clicked(self):
 		with open(f"{self.video_metadata_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
@@ -1078,7 +1137,7 @@ class NYTDialogWindow(QMainWindow):
 			log.error("FFmpeg not found")
 
 	def __init_about_screen(self):
-		response = get("https://avatars.githubusercontent.com/u/73797846?v=4")
+		response = get("https://gravatar.com/avatar/958ee1c4f59712e46351f051f86c9031?size=256")
 		if response.status_code == 200:
 			pixmap = QPixmap()
 			pixmap.loadFromData(response.content)
@@ -1088,7 +1147,7 @@ class NYTDialogWindow(QMainWindow):
 			log.warning("Image loading failed")
 
 		self.video_metadata_widget.title_label.setText("Nakama's Youtube Tools")
-		self.video_metadata_widget.description_label.setPlainText("Thank you")
+		self.video_metadata_widget.description_label.setHtml(description)
 		self.video_metadata_widget.video_data_tab_widget.setTabVisible(1, False)
 		self.__change_download_butt_enabling(False)
 
@@ -1098,6 +1157,10 @@ class NYTDialogWindow(QMainWindow):
 
 	def __set_status(self, message):
 		self.status_bar.showMessage(message)
+
+	def __set_title_bar_name(self, title):
+		self.setWindowTitle(f"NYT: {title}")
+		self.title_bar.program_name.setText(f"NYT: {title}")
 
 	def __analyze_link(self) -> bool:
 		if "http" in self.video_searcher_widget.url_line_edit.text():
@@ -1173,6 +1236,8 @@ class NYTDialogWindow(QMainWindow):
 			return suspicious_line
 
 		self.video_metadata['title'] = unicode_safe(self.video_metadata['title'])
+
+		self.__set_title_bar_name(self.video_metadata['title'])
 
 		self.video_metadata_widget.title_label.setText(self.video_metadata['title'])
 		self.video_metadata_widget.description_label.setPlainText(self.video_metadata['description'])
