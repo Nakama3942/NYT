@@ -31,9 +31,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from yt_dlp import YoutubeDL
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon
+from PyQt6.QtGui import QPixmap, QIcon, QAction
 
 from qdarktheme import setup_theme, get_themes
 
@@ -127,12 +127,16 @@ yt_dlp_log.addHandler(console_handler)
 yt_dlp_log.addHandler(file_handler)
 yt_dlp_log.addHandler(status_handler)
 
+# Настройка логгера для ffmpeg
+ffmpeg_log = logging.getLogger("ffmpeg")
+ffmpeg_log.setLevel(logging.DEBUG)
+ffmpeg_log.addHandler(console_handler)
+ffmpeg_log.addHandler(file_handler)
+ffmpeg_log.addHandler(status_handler)
+
 # todo
-#  1. Реализовать центрирование окна
-#  2. Обновить логирование ffmpeg
-#  3. Реализовать кнопки сворачивания окна
-#  4. Проверить загрузку из других источников (например, твиттера)
-#  5. Провести рефакторинг кода
+#  1. Проверить загрузку из других источников (например, твиттера)
+#  2. Провести рефакторинг кода
 
 class ProgramData:
 	settings = {
@@ -223,8 +227,8 @@ class Loader(QObject):
 		future = self.__executor.submit(self.__download_va_wrapper, video_url, video_title, video_format, audio_quality)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def submit_extract_audio(self, filenames, ffmpeg_folder, enable_logging):
-		future = self.__executor.submit(self.__extract_audio_wrapper, filenames, ffmpeg_folder, enable_logging)
+	def submit_extract_audio(self, filenames, ffmpeg_folder):
+		future = self.__executor.submit(self.__extract_audio_wrapper, filenames, ffmpeg_folder)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def __get_playlist_metadata(self, playlist_url):
@@ -275,9 +279,9 @@ class Loader(QObject):
 		except Exception as err:
 			log.error(f"[✗] ERROR: Downloading error {err}")
 
-	def __extract_audio_wrapper(self, filenames, ffmpeg_folder, enable_logging):
+	def __extract_audio_wrapper(self, filenames, ffmpeg_folder):
 		for file in filenames:
-			self.__ffmpeg_extract_audio(ffmpeg_folder, file, enable_logging)
+			self.__ffmpeg_extract_audio(ffmpeg_folder, file)
 		log.info(f"[✓] Extraction complete")
 
 	def __download_video(self, video_url, video_title, video_format, audio_quality):
@@ -307,7 +311,7 @@ class Loader(QObject):
 		with YoutubeDL(ydl_opts) as ydl:
 			ydl.download([video_url])
 
-	def __ffmpeg_extract_audio(self, ffmpeg, filename, enable_logging):
+	def __ffmpeg_extract_audio(self, ffmpeg, filename):
 		command = [
 			ffmpeg,								# Путь к ffmpeg (если он не в PATH)
 			"-loglevel", "info",				# Уровень логирования для ffmpeg
@@ -320,11 +324,9 @@ class Loader(QObject):
 		]
 		try:
 			result = run(command, check=True, capture_output=True, text=True, encoding="utf-8")
-			if enable_logging:
-				# Отправляем stdout и stderr в логгер
-				log.info(result.stdout)
-				if result.stderr:
-					log.error(result.stderr)
+			ffmpeg_log.info(result.stdout)
+			if result.stderr:
+				ffmpeg_log.error(result.stderr)
 			self.__extract_emitter(f"[✓] File {filename} converted successfully")
 		except CalledProcessError as err:
 			log.error(f"[✗] ERROR: File {filename} could not be converted {err}")
@@ -579,11 +581,13 @@ class SettingsWidget(QWidget):
 			log.warning("Logs is enabled")
 			log.addHandler(file_handler)
 			yt_dlp_log.addHandler(file_handler)
+			ffmpeg_log.addHandler(file_handler)
 		else:
 			# Отключаем обработчики
 			log.warning("Logs is disabled")
 			log.removeHandler(file_handler)
 			yt_dlp_log.removeHandler(file_handler)
+			ffmpeg_log.removeHandler(file_handler)
 
 		self.enable_logging_signal.emit(state)
 
@@ -600,14 +604,14 @@ class SettingsWidget(QWidget):
 		self.enable_yt_dlp_logger_signal.emit(state)
 
 	def enable_ffmpeg_logs_check_box_state_changed(self, state):
-		# if state:
-		# 	# Включаем логирование yt_dlp
-		# 	log.warning("YT-DLP logger is enabled")
-		# 	yt_dlp_log.addHandler(file_handler)
-		# else:
-		# 	# Отключаем логирование yt_dlp
-		# 	log.warning("YT-DLP logger is disabled")
-		# 	yt_dlp_log.removeHandler(file_handler)
+		if state:
+			# Включаем логирование ffmpeg
+			log.warning("FFmpeg logger is enabled")
+			ffmpeg_log.addHandler(file_handler)
+		else:
+			# Отключаем логирование ffmpeg
+			log.warning("FFmpeg logger is disabled")
+			ffmpeg_log.removeHandler(file_handler)
 
 		self.enable_ffmpeg_logger_signal.emit(state)
 
@@ -820,10 +824,36 @@ class TitleBarWidget(QWidget):
 
 		self.parent = parent
 
+		#####
+
+		# Initialization of Tray
+
+		self.show_action = QAction("Show", self)
+		# self.show_action.setIcon(QIcon("./icon/open.png"))
+		self.show_action.triggered.connect(self.show_action_triggered)
+		self.exit_action = QAction("Exit", self)
+		# self.exit_action.setIcon(QIcon("./icon/fork.png"))
+		self.exit_action.triggered.connect(self.exit_action_triggered)
+
+		self.tray_menu = QMenu()
+		self.tray_menu.setTitle("NYT")
+		self.tray_menu.addAction(self.show_action)
+		self.tray_menu.addSeparator()
+		self.tray_menu.addAction(self.exit_action)
+
+		self.tray_icon = QSystemTrayIcon(self.parent)
+		self.tray_icon.setIcon(QIcon("nyt.ico"))
+		self.tray_icon.setContextMenu(self.tray_menu)
+
+		#####
+
 		self.program_name = QLineEdit("NYT: © 2024 Kalynovsky Valentin")
+		self.roll_butt = QPushButton("—")
+		self.tray_butt = QPushButton("⤵")
 		self.exit_butt = QPushButton("✗")
 
 		self.program_name.setEnabled(False)
+		self.program_name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 		self.program_name.setStyleSheet("""
 			QLineEdit {
 				background-color: rgba(63, 64, 66, 0.4);
@@ -833,7 +863,12 @@ class TitleBarWidget(QWidget):
 				font-size: 16px;
 			}
 		""")
-		self.program_name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+		self.roll_butt.setFixedSize(40, 30)
+		self.roll_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
+		self.roll_butt.clicked.connect(self.roll_butt_clicked)
+		self.tray_butt.setFixedSize(40, 30)
+		self.tray_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
+		self.tray_butt.clicked.connect(self.tray_butt_clicked)
 		self.exit_butt.setFixedSize(40, 30)
 		self.exit_butt.setStyleSheet(custom_but_qss_preparing([255, 59, 48]))
 		self.exit_butt.clicked.connect(self.exit_butt_clicked)
@@ -846,11 +881,30 @@ class TitleBarWidget(QWidget):
 		self.title_bar_layout = QHBoxLayout()
 		self.title_bar_layout.setContentsMargins(0, 0, 0, 0)
 		self.title_bar_layout.addWidget(self.program_name)
+		self.title_bar_layout.addWidget(self.roll_butt)
+		self.title_bar_layout.addWidget(self.tray_butt)
 		self.title_bar_layout.addWidget(self.exit_butt)
 
 		###
 
 		self.setLayout(self.title_bar_layout)
+
+	def show_action_triggered(self):
+		self.tray_icon.hide()
+		self.parent.show()
+		log.debug("Program opened from tray")
+
+	def exit_action_triggered(self):
+		self.tray_icon.hide()
+		QApplication.instance().quit()
+
+	def roll_butt_clicked(self):
+		self.parent.showMinimized()
+
+	def tray_butt_clicked(self):
+		self.tray_icon.show()
+		self.parent.hide()
+		log.debug("Program closed to tray")
 
 	def exit_butt_clicked(self):
 		self.parent.close()
@@ -995,12 +1049,11 @@ class NYTDialogWindow(QMainWindow):
 		self.central_widget = QWidget()
 		self.central_widget.setLayout(self.central_layout)
 
-		self.__init_about_screen()
-
-		self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
-		self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 		self.setCentralWidget(self.central_widget)
 		self.setStatusBar(self.status_bar)
+
+		self.__init_about_screen()
+		self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
 
 		self.settings_widget.title_bar_combo_box.setCurrentIndex(program_data.settings["theme"]["title bar"])
 		self.settings_widget.appearance_combo_box.setCurrentIndex(program_data.settings["theme"]["theme"])
@@ -1259,8 +1312,7 @@ class NYTDialogWindow(QMainWindow):
 		if self.settings_widget.ffmpeg_folder_label.text() != "":
 			self.loader.submit_extract_audio(
 				file_names,
-				self.settings_widget.ffmpeg_folder_label.text(),
-				self.settings_widget.enable_ffmpeg_logs_check_box.isChecked()
+				self.settings_widget.ffmpeg_folder_label.text()
 			)
 		else:
 			log.error("FFmpeg not found")
@@ -1285,7 +1337,10 @@ class NYTDialogWindow(QMainWindow):
 		self.video_metadata_widget.title_label.setReadOnly(not state)
 
 	def __set_status(self, message):
-		self.status_bar.showMessage(message)
+		try:
+			self.status_bar.showMessage(message)
+		except AttributeError:
+			return
 
 	def __set_title_bar_name(self, title):
 		self.setWindowTitle(f"NYT: {title}")
@@ -1378,14 +1433,14 @@ class NYTDialogWindow(QMainWindow):
 
 		log.debug("Video metadata was setted")
 
-	# def show(self):
-	# 	# Set window to center
-	# 	qr = self.frameGeometry()
-	# 	qr.moveCenter(self.screen().availableGeometry().center())
-	# 	self.move(qr.topLeft())
-	# 	# IMPORTANT_DATA.window_height = self.height()
-	# 	# IMPORTANT_DATA.window_width = self.width()
-	# 	super().show()
+	def showEvent(self, event):
+		# Set window to center
+		qr = self.frameGeometry()
+		qr.moveCenter(self.screen().availableGeometry().center())
+		self.move(qr.topLeft())
+
+		log.debug("The program is shown")
+		super().showEvent(event)
 
 	def closeEvent(self, event):
 		program_data.settings["theme"]["title bar"] = self.settings_widget.title_bar_combo_box.currentIndex()
