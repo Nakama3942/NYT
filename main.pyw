@@ -17,17 +17,19 @@
 import sys
 from os import listdir, getcwd, rename, path, getenv
 from subprocess import run, CalledProcessError
+
+import yt_dlp.utils.networking
 from requests import get
 from datetime import datetime
 import logging
 import re
 import pickle
+import yaml
 from copy import deepcopy
 
 from concurrent.futures import ThreadPoolExecutor
 
 from yt_dlp import YoutubeDL
-import json
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
@@ -71,6 +73,17 @@ def custom_but_qss_preparing(rgb_color):
 			color: #000;
 		}}
 	"""
+
+
+def convert_http_header_to_dict(obj):
+	if isinstance(obj, yt_dlp.utils.networking.HTTPHeaderDict):
+		return dict(obj)
+	elif isinstance(obj, dict):
+		return {key: convert_http_header_to_dict(value) for key, value in obj.items()}
+	elif isinstance(obj, list):
+		return [convert_http_header_to_dict(item) for item in obj]
+	else:
+		return obj
 
 # Кастомный обработчик логов для передачи сигналов
 class LogSignalEmitter(logging.Handler, QObject):
@@ -116,9 +129,67 @@ yt_dlp_log.addHandler(status_handler)
 
 # todo
 #  1. Реализовать центрирование окна
-#  2. Реализовать сохранение настроек
-#  3. Проверить загрузку из других источников (например, твиттера)
-#  4. Провести рефакторинг кода
+#  2. Обновить логирование ffmpeg
+#  3. Реализовать кнопки сворачивания окна
+#  4. Проверить загрузку из других источников (например, твиттера)
+#  5. Провести рефакторинг кода
+
+class ProgramData:
+	settings = {
+		"theme": {
+			"title bar": 0,
+			"theme": 0,
+			"accent color": "#34C759"
+		},
+		"logging": {
+			"enable logging": True,
+			"enable yt-dlp logs": True,
+			"enable ffmpeg logs": True,
+			"enable debug logs": False
+		},
+		"folders": {
+			"download folder": "",
+			"ffmpeg folder": ""
+		},
+		"other video data settings": {
+			"data format": 0
+		},
+		"advanced naming": {
+			"advanced naming": False,
+			"advanced naming uploader": False,
+			"advanced naming resolution": False,
+			"advanced naming playlist": False,
+			"advanced naming playlist index": False
+		}
+	}
+
+	cache = {}
+
+	def load_settings(self):
+		try:
+			with open("nyt.settings.yaml", "r") as settings_file:
+				self.settings = yaml.safe_load(settings_file)
+		except FileNotFoundError:
+			with open("nyt.settings.yaml", "w") as settings_file:
+				yaml.dump(self.settings, settings_file, sort_keys=False)
+
+	def save_settings(self):
+		with open("nyt.settings.yaml", "w") as settings_file:
+			yaml.dump(self.settings, settings_file, sort_keys=False)
+
+	def load_cache(self):
+		try:
+			with open("nyt.cache", "rb") as cache_file:
+				self.cache = pickle.load(cache_file)
+		except FileNotFoundError:
+			with open("nyt.cache", "wb") as cache_file:
+				pickle.dump(self.cache, cache_file)
+
+	def save_cache(self):
+		with open("nyt.cache", "wb") as cache_file:
+			pickle.dump(self.cache, cache_file)
+
+program_data = ProgramData()
 
 class Loader(QObject):
 	founded = pyqtSignal(dict)
@@ -284,13 +355,15 @@ class Loader(QObject):
 		log.debug(future)
 
 class SettingsWidget(QWidget):
+	title_bar_signal = pyqtSignal()
+	appearance_signal = pyqtSignal()
+	accent_color_signal = pyqtSignal(str)
 	enable_logging_signal = pyqtSignal(bool)
 	enable_yt_dlp_logger_signal = pyqtSignal(bool)
+	enable_ffmpeg_logger_signal = pyqtSignal(bool)
 	enable_debug_logs_signal = pyqtSignal(bool)
 	choose_download_folder_signal = pyqtSignal()
 	choose_ffmpeg_folder_signal = pyqtSignal()
-
-	color = "#34C759"
 
 	def __init__(self):
 		super(SettingsWidget, self).__init__()
@@ -387,6 +460,7 @@ class SettingsWidget(QWidget):
 			"YYYY-MM-DD"  # American alternative
 		])
 
+		self.title_bar_combo_box.currentTextChanged.connect(self.title_bar_combo_box_text_changed)
 		self.appearance_combo_box.currentTextChanged.connect(self.appearance_combo_box_text_changed)
 		self.color_dialog_butt.clicked.connect(self.color_dialog_butt_clicked)
 		self.blue_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#007BFF"))
@@ -398,7 +472,8 @@ class SettingsWidget(QWidget):
 		self.green_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#34C759"))
 		self.graphite_color_butt.clicked.connect(lambda: self.accent_color_butt_clicked("#808080"))
 		self.enable_logging_group_box.toggled.connect(self.enable_logging_check_box_toggled)
-		self.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logger_check_box_state_changed)
+		self.enable_yt_dlp_logs_check_box.stateChanged.connect(self.enable_yt_dlp_logs_check_box_state_changed)
+		self.enable_ffmpeg_logs_check_box.stateChanged.connect(self.enable_ffmpeg_logs_check_box_state_changed)
 		self.enable_debug_logs_check_box.stateChanged.connect(self.enable_debug_logs_check_box_state_changed)
 		self.choose_download_folder_butt.clicked.connect(self.choose_download_folder_butt_clicked)
 		self.choose_ffmpeg_folder_butt.clicked.connect(self.choose_ffmpeg_folder_butt_clicked)
@@ -475,18 +550,28 @@ class SettingsWidget(QWidget):
 
 		self.setLayout(self.video_finder_layout)
 
-	def appearance_combo_box_text_changed(self, new_theme):
-		setup_theme(theme=new_theme.lower(), custom_colors={"primary": self.color})
+	def title_bar_combo_box_text_changed(self):
+		log.debug(f"Changed type title bar to {self.title_bar_combo_box.currentText()}")
+		self.title_bar_signal.emit()
+
+	def appearance_combo_box_text_changed(self):
+		setup_theme(theme=self.appearance_combo_box.currentText().lower(), custom_colors={"primary": program_data.settings["theme"]["color"]})
+		log.debug(f"Changed theme to {self.appearance_combo_box.currentText()}")
+		self.appearance_signal.emit()
 
 	def color_dialog_butt_clicked(self):
 		q_color = QColorDialog.getColor()
 		if q_color.isValid():
-			self.color = q_color.name()
-			setup_theme(theme=self.appearance_combo_box.currentText().lower(), custom_colors={"primary": self.color})
+			program_data.settings["theme"]["accent color"] = q_color.name()
+			setup_theme(theme=self.appearance_combo_box.currentText().lower(), custom_colors={"primary": q_color.name()})
+			log.debug(f"Changed accent color to {q_color.name()}")
+			self.accent_color_signal.emit(q_color.name())
 
 	def accent_color_butt_clicked(self, color):
-		self.color = color
+		program_data.settings["theme"]["accent color"] = color
 		setup_theme(theme=self.appearance_combo_box.currentText().lower(), custom_colors={"primary": color})
+		log.debug(f"Changed accent color to {color}")
+		self.accent_color_signal.emit(color)
 
 	def enable_logging_check_box_toggled(self, state):
 		if state:
@@ -502,7 +587,7 @@ class SettingsWidget(QWidget):
 
 		self.enable_logging_signal.emit(state)
 
-	def enable_yt_dlp_logger_check_box_state_changed(self, state):
+	def enable_yt_dlp_logs_check_box_state_changed(self, state):
 		if state:
 			# Включаем логирование yt_dlp
 			log.warning("YT-DLP logger is enabled")
@@ -513,6 +598,18 @@ class SettingsWidget(QWidget):
 			yt_dlp_log.removeHandler(file_handler)
 
 		self.enable_yt_dlp_logger_signal.emit(state)
+
+	def enable_ffmpeg_logs_check_box_state_changed(self, state):
+		# if state:
+		# 	# Включаем логирование yt_dlp
+		# 	log.warning("YT-DLP logger is enabled")
+		# 	yt_dlp_log.addHandler(file_handler)
+		# else:
+		# 	# Отключаем логирование yt_dlp
+		# 	log.warning("YT-DLP logger is disabled")
+		# 	yt_dlp_log.removeHandler(file_handler)
+
+		self.enable_ffmpeg_logger_signal.emit(state)
 
 	def enable_debug_logs_check_box_state_changed(self, state):
 		if state:
@@ -786,18 +883,28 @@ class NYTDialogWindow(QMainWindow):
 		self.standard_quality = 144
 		status_handler.log_signal.connect(self.__set_status)
 
-		try:
-			with open("nyt.cache", "rb") as cache_file:
-				self.cache = json.loads(pickle.load(cache_file))
-		except FileNotFoundError:
-			with open("nyt.cache", "wb") as cache_file:
-				self.cache = {}
-				pickle.dump(json.dumps(self.cache), cache_file)
+		program_data.load_settings()
+		program_data.load_cache()
 
 		#####
 
 		self.settings_widget = SettingsWidget()
 		self.settings_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+
+		self.settings_widget.date_format_combo_box.setCurrentIndex(program_data.settings["other video data settings"]["data format"])
+		self.settings_widget.enable_logging_group_box.setChecked(program_data.settings["logging"]["enable logging"])
+		self.settings_widget.enable_yt_dlp_logs_check_box.setChecked(program_data.settings["logging"]["enable yt-dlp logs"])
+		self.settings_widget.enable_ffmpeg_logs_check_box.setChecked(program_data.settings["logging"]["enable ffmpeg logs"])
+		self.settings_widget.enable_debug_logs_check_box.setChecked(program_data.settings["logging"]["enable debug logs"])
+		self.settings_widget.advanced_naming_group_box.setChecked(program_data.settings["advanced naming"]["advanced naming"])
+		self.settings_widget.advanced_naming_uploader_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming uploader"])
+		self.settings_widget.advanced_naming_resolution_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming resolution"])
+		self.settings_widget.advanced_naming_playlist_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming playlist"])
+		self.settings_widget.advanced_naming_playlist_index_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming playlist index"])
+
+		if program_data.settings["folders"]["download folder"]:
+			self.settings_widget.download_folder_label.setText(program_data.settings["folders"]["download folder"])
+			self.settings_widget.ffmpeg_folder_label.setText(program_data.settings["folders"]["ffmpeg folder"])
 
 		self.settings_widget.title_bar_combo_box.currentTextChanged.connect(self.title_bar_combo_box_current_text_changed)
 		self.settings_widget.date_format_combo_box.currentTextChanged.connect(self.date_format_combo_box_current_text_changed)
@@ -895,6 +1002,11 @@ class NYTDialogWindow(QMainWindow):
 		self.setCentralWidget(self.central_widget)
 		self.setStatusBar(self.status_bar)
 
+		self.settings_widget.title_bar_combo_box.setCurrentIndex(program_data.settings["theme"]["title bar"])
+		self.settings_widget.appearance_combo_box.setCurrentIndex(program_data.settings["theme"]["theme"])
+		self.title_bar_combo_box_current_text_changed(self.settings_widget.title_bar_combo_box.currentText())
+		setup_theme(theme=self.settings_widget.appearance_combo_box.currentText().lower(), custom_colors={"primary": program_data.settings["theme"]["accent color"]})
+
 		log.debug("Interface was initialized")
 
 		#####
@@ -913,8 +1025,9 @@ class NYTDialogWindow(QMainWindow):
 
 	def loader_founded(self, metadata: dict):
 		self.download_progress_bars_widget.unit_progress_bar.setRange(0, 100)
-		if not metadata["id"] in self.cache.keys():
-			self.cache[metadata["id"]] = metadata
+		if not metadata["id"] in program_data.cache.keys():
+			metadata = convert_http_header_to_dict(metadata)
+			program_data.cache[metadata["id"]] = metadata
 
 		if "_type" in metadata and metadata["_type"] == "playlist":
 			log.debug("Playlist metadata was intercepted")
@@ -1028,9 +1141,9 @@ class NYTDialogWindow(QMainWindow):
 		self.download_progress_bars_widget.unit_progress_bar.setRange(0, 0)
 		self.download_progress_bars_widget.unit_progress_bar.setValue(0)
 		if self.__analyze_link():
-			if self.video_searcher_widget.url_line_edit.text() in self.cache.keys():
+			if self.video_searcher_widget.url_line_edit.text() in program_data.cache.keys():
 				log.debug("Loaded cached data")
-				self.loader_founded(self.cache[self.video_searcher_widget.url_line_edit.text()])
+				self.loader_founded(program_data.cache[self.video_searcher_widget.url_line_edit.text()])
 			else:
 				if self.playlist_flag:
 					log.debug(self.video_searcher_widget.url_line_edit.text())
@@ -1275,15 +1388,28 @@ class NYTDialogWindow(QMainWindow):
 	# 	super().show()
 
 	def closeEvent(self, event):
-		with open("nyt.cache", "wb") as cache_file:
-			pickle.dump(json.dumps(self.cache), cache_file)
+		program_data.settings["theme"]["title bar"] = self.settings_widget.title_bar_combo_box.currentIndex()
+		program_data.settings["theme"]["theme"] = self.settings_widget.appearance_combo_box.currentIndex()
+		program_data.settings["logging"]["enable logging"] = self.settings_widget.enable_logging_group_box.isChecked()
+		program_data.settings["logging"]["enable yt-dlp logs"] = self.settings_widget.enable_yt_dlp_logs_check_box.isChecked()
+		program_data.settings["logging"]["enable ffmpeg logs"] = self.settings_widget.enable_ffmpeg_logs_check_box.isChecked()
+		program_data.settings["logging"]["enable debug logs"] = self.settings_widget.enable_debug_logs_check_box.isChecked()
+		program_data.settings["folders"]["download folder"] = self.settings_widget.download_folder_label.text()
+		program_data.settings["folders"]["ffmpeg folder"] = self.settings_widget.ffmpeg_folder_label.text()
+		program_data.settings["other video data settings"]["data format"] = self.settings_widget.date_format_combo_box.currentIndex()
+		program_data.settings["advanced naming"]["advanced naming"] = self.settings_widget.advanced_naming_group_box.isChecked()
+		program_data.settings["advanced naming"]["advanced naming uploader"] = self.settings_widget.advanced_naming_uploader_check_box.isChecked()
+		program_data.settings["advanced naming"]["advanced naming resolution"] = self.settings_widget.advanced_naming_resolution_check_box.isChecked()
+		program_data.settings["advanced naming"]["advanced naming playlist"] = self.settings_widget.advanced_naming_playlist_check_box.isChecked()
+		program_data.settings["advanced naming"]["advanced naming playlist index"] = self.settings_widget.advanced_naming_playlist_index_check_box.isChecked()
+		program_data.save_settings()
+		program_data.save_cache()
 
 		log.info("The program is closed")
 		super().closeEvent(event)
 
 if __name__ == '__main__':
 	app = QApplication(sys.argv)
-	setup_theme(theme="dark", custom_colors={"primary": "#34C759"})
 	ui = NYTDialogWindow()
 	ui.show()
 	sys.exit(app.exec())
