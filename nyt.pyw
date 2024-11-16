@@ -17,16 +17,15 @@
 import sys
 from os import listdir, getcwd, rename, path, getenv
 from subprocess import run, CalledProcessError
-
-from requests import get
 from datetime import datetime
 import logging
 import re
 import pickle
-import yaml
 from copy import deepcopy
-
 from concurrent.futures import ThreadPoolExecutor
+
+from requests import get
+import yaml
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils.networking import HTTPHeaderDict

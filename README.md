@@ -31,7 +31,9 @@ It is not always possible to download videos through various resources such as y
 
 Everything is bad. And the savefrom.net resource does not allow you to download videos higher than 360p at all... (╥﹏╥)
 
-> [!hint] Old text referring to the console version
+> [!WARNING]
+> **Old text referring to the console version**
+>
 > This script allows:
 > 1. Quickly download videos from YouTube without problems and changing the name;
 > 2. Rename any files in the directory;
@@ -72,28 +74,28 @@ The full text of the license can be found at the following [link](https://github
 ## Installation
 The program does not require installation. Just unzip the archive wherever you want and save the shortcut to the executable file.
 
-## Системные требования
+## System Requirements
 .py:
 - python		v3.11 or higher
 - argparse		(built-in)
-- readchar		(pip install readchar)
-- yt_dlp		(pip install yt_dlp)
 - os			(built-in)
 - subprocess	(built-in)
+- readchar		(pip install readchar)
+- yt_dlp		(pip install yt_dlp)
 
 .pyw:
 - python        v3.11 or higher
 - sys           (built-in)
 - os            (built-in)
 - subprocess    (built-in)
-- requests      (pip install requests)
 - datetime      (built-in)
 - logging       (built-in)
 - re            (built-in)
 - pickle        (built-in)
-- yaml          (pip install pyyaml)
 - copy          (built-in)
 - concurrent    (built-in)
+- requests      (pip install requests)
+- yaml          (pip install pyyaml)
 - yt_dlp        (pip install yt-dlp)
 - PyQt6         (pip install pyqt6)
 - qdarktheme    (pip install qdarktheme)

@@ -13,10 +13,11 @@
 #  limitations under the License.
 
 from argparse import ArgumentParser
-from readchar import readkey
-from yt_dlp import YoutubeDL
 from os import listdir, rename
 from subprocess import run, CalledProcessError
+
+from readchar import readkey
+from yt_dlp import YoutubeDL
 
 def download_audio_from_playlist(youtube_playlist_url, logging):
 	ydl_opts = {
