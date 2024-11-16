@@ -12,7 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-# https://www.youtube.com/playlist?list=PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM
+# todo Провести рефакторинг кода
 
 import sys
 from os import listdir, getcwd, rename, path, getenv
@@ -31,9 +31,9 @@ from concurrent.futures import ThreadPoolExecutor
 from yt_dlp import YoutubeDL
 from yt_dlp.utils.networking import HTTPHeaderDict
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QApplication, QMainWindow, QSplashScreen, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QAction
+from PyQt6.QtGui import QPixmap, QIcon, QAction, QFont
 
 from qdarktheme import setup_theme, get_themes
 
@@ -133,10 +133,6 @@ ffmpeg_log.setLevel(logging.DEBUG)
 ffmpeg_log.addHandler(console_handler)
 ffmpeg_log.addHandler(file_handler)
 ffmpeg_log.addHandler(status_handler)
-
-# todo
-#  1. Добавить экран загрузки
-#  2. Провести рефакторинг кода
 
 class ProgramData:
 	settings = {
@@ -807,7 +803,7 @@ class VideoSearcherWidget(QWidget):
 		self.find_video_butt = QPushButton("Find video")
 
 		self.url_line_edit.setPlaceholderText("Enter the video or playlist URL/ID")
-		self.url_line_edit.setText("https://www.youtube.com/watch?v=nSFfpEznkF8")
+		# self.url_line_edit.setText("https://www.youtube.com/watch?v=nSFfpEznkF8")
 		# self.url_line_edit.setText("https://www.youtube.com/playlist?list=PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM")
 		# self.url_line_edit.setText("https://www.youtube.com/watch?v=nSFfpEznkF8&list=PL2MbnZfZV5Ksz3V1TABFnBiEXDjK4RqKM&index=3")
 
@@ -935,16 +931,32 @@ class NYTDialogWindow(QMainWindow):
 	def __init__(self):
 		super(NYTDialogWindow, self).__init__()
 
+		# Создание сплэш-экрана
+		pixmap = QPixmap("nyt.ico")
+		pixmap = pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+		font = QFont()
+		font.setPointSize(14)
+		font.setWeight(QFont.Weight.Bold)
+		splash = QSplashScreen(pixmap)
+		splash.setFont(font)
+		splash.show()
+
+		splash.showMessage("Loading the program...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
 		log.debug("Initialization started")
 
 		self.video_metadata = None
 		self.playlist_metadata = None
 		self.playlist_flag = False
-		self.standard_quality = 144
+		self.standard_quality = 720
 		status_handler.log_signal.connect(self.__set_status)
 
+		splash.showMessage("Loading settings and cache", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
 		program_data.load_settings()
 		program_data.load_cache()
+
+		#####
+
+		splash.showMessage("Interface setup", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
 
 		#####
 
@@ -999,6 +1011,7 @@ class NYTDialogWindow(QMainWindow):
 		self.video_searcher_widget = VideoSearcherWidget()
 		self.video_metadata_widget = VideoDataWidget()
 
+		self.video_searcher_widget.url_line_edit.returnPressed.connect(self.find_video_butt_clicked)
 		self.video_searcher_widget.find_video_butt.clicked.connect(self.find_video_butt_clicked)
 		self.video_metadata_widget.title_label.textChanged.connect(self.title_label_text_changed)
 
@@ -1032,6 +1045,8 @@ class NYTDialogWindow(QMainWindow):
 
 		#####
 
+		splash.showMessage("Interface installation", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+
 		# Dialog window customization
 
 		self.title_bar = TitleBarWidget(self)
@@ -1060,10 +1075,14 @@ class NYTDialogWindow(QMainWindow):
 		self.setCentralWidget(self.central_widget)
 		self.setStatusBar(self.status_bar)
 
+		splash.showMessage("Installing a theme", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+
 		self.settings_widget.title_bar_combo_box.setCurrentIndex(program_data.settings["theme"]["title bar"])
 		self.settings_widget.appearance_combo_box.setCurrentIndex(program_data.settings["theme"]["theme"])
 		self.title_bar_combo_box_current_text_changed(self.settings_widget.title_bar_combo_box.currentText())
 		setup_theme(theme=self.settings_widget.appearance_combo_box.currentText().lower(), custom_colors={"primary": program_data.settings["theme"]["accent color"]})
+
+		splash.showMessage("Installing resources", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
 
 		self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
 		self.__init_about_screen()
@@ -1072,12 +1091,16 @@ class NYTDialogWindow(QMainWindow):
 
 		#####
 
+		splash.showMessage("Initializing the loader", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+
 		self.loader = Loader()
 		self.loader.founded.connect(self.loader_founded)
 		self.loader.updated.connect(self.loader_updated)
 		self.loader.extracted.connect(self.loader_extracted)
 		self.loader.start_download.connect(self.loader_start_download)
 		self.loader.finish_download.connect(self.loader_finish_download)
+
+		splash.close()
 
 		log.debug("Loader was initialized")
 
