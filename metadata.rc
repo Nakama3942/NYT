@@ -1,7 +1,7 @@
 VSVersionInfo(
 	ffi=FixedFileInfo(
-	filevers=(1, 0, 0, 0),
-	prodvers=(1, 0, 0, 0),
+	filevers=(2, 0, 0, 0),
+	prodvers=(2, 0, 0, 0),
 	mask=0x3f,
 	flags=0x0,
 	OS=0x40004,
@@ -15,10 +15,10 @@ VSVersionInfo(
 				'040904b0', # 0809 = en-GB, 04b0 = Unicode
 				[StringStruct('CompanyName', 'Nakama'),
 				StringStruct('FileDescription', 'Nakama’s Youtube Tools'),
-				StringStruct('FileVersion', '1.0.0.0'),
+				StringStruct('FileVersion', '2.0.0.0'),
 				StringStruct('ProductName', 'Nakama’s Youtube Tools'),
-				StringStruct('ProductVersion', '1.0.0.0'),
-				StringStruct('LegalCopyright', 'Copyright (C) 2023 Kalynovsky Valentin. All rights reserved.'),
+				StringStruct('ProductVersion', '2.0.0.0'),
+				StringStruct('LegalCopyright', 'Copyright © 2024 Kalynovsky Valentin. All rights reserved.'),
 				StringStruct('InternalName', 'nyt.exe'),
 				StringStruct('OriginalFilename', 'nyt.exe')])
 			]),
