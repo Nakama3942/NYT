@@ -18,7 +18,6 @@ import sys
 from os import listdir, getcwd, rename, path, getenv
 from subprocess import run, CalledProcessError
 
-import yt_dlp.utils.networking
 from requests import get
 from datetime import datetime
 import logging
@@ -30,6 +29,7 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 from yt_dlp import YoutubeDL
+from yt_dlp.utils.networking import HTTPHeaderDict
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel, QLineEdit, QCheckBox, QProgressBar, QComboBox, QPushButton, QPlainTextEdit, QTextBrowser, QTabWidget, QSpacerItem, QMessageBox, QStatusBar, QFileDialog, QColorDialog, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
@@ -76,7 +76,7 @@ def custom_but_qss_preparing(rgb_color):
 
 
 def convert_http_header_to_dict(obj):
-	if isinstance(obj, yt_dlp.utils.networking.HTTPHeaderDict):
+	if isinstance(obj, HTTPHeaderDict):
 		return dict(obj)
 	elif isinstance(obj, dict):
 		return {key: convert_http_header_to_dict(value) for key, value in obj.items()}
@@ -135,7 +135,7 @@ ffmpeg_log.addHandler(file_handler)
 ffmpeg_log.addHandler(status_handler)
 
 # todo
-#  1. Проверить загрузку из других источников (например, твиттера)
+#  1. Добавить экран загрузки
 #  2. Провести рефакторинг кода
 
 class ProgramData:
@@ -189,14 +189,24 @@ class ProgramData:
 			with open("nyt.cache", "wb") as cache_file:
 				pickle.dump(self.cache, cache_file)
 
+		# try:
+		# 	with open("nyt.cache.yaml", "r") as cache_file:
+		# 		self.cache = yaml.safe_load(cache_file)
+		# except FileNotFoundError:
+		# 	with open("nyt.cache.yaml", "w") as cache_file:
+		# 		yaml.dump(self.cache, cache_file, sort_keys=False)
+
 	def save_cache(self):
 		with open("nyt.cache", "wb") as cache_file:
 			pickle.dump(self.cache, cache_file)
 
+		# with open("nyt.cache.yaml", "w") as cache_file:
+		# 	yaml.dump(self.cache, cache_file, sort_keys=False)
+
 program_data = ProgramData()
 
 class Loader(QObject):
-	founded = pyqtSignal(dict)
+	founded = pyqtSignal(bool, dict)
 	updated = pyqtSignal(int, int)
 	extracted = pyqtSignal()
 	start_download = pyqtSignal()
@@ -207,12 +217,8 @@ class Loader(QObject):
 		super(Loader, self).__init__()
 		self.__executor = ThreadPoolExecutor(max_workers=10)
 
-	def submit_find_playlist(self, playlist_url):
-		future = self.__executor.submit(self.__get_playlist_metadata, playlist_url)
-		future.add_done_callback(self.__internal_done_callback)
-
-	def submit_find_video(self, video_url):
-		future = self.__executor.submit(self.__get_video_metadata, video_url)
+	def submit_find_metadata(self, url):
+		future = self.__executor.submit(self.__get_metadata, url)
 		future.add_done_callback(self.__internal_done_callback)
 
 	def submit_download_video(self, video_url, video_title, video_format, audio_quality):
@@ -231,22 +237,18 @@ class Loader(QObject):
 		future = self.__executor.submit(self.__extract_audio_wrapper, filenames, ffmpeg_folder)
 		future.add_done_callback(self.__internal_done_callback)
 
-	def __get_playlist_metadata(self, playlist_url):
+	def __get_metadata(self, url):
 		ydl_opts = {
-			"quiet": False,			# Включает логирование
+			"quiet": False,					# Включает логирование
 			"logger": yt_dlp_log,
 			"extract_flat": "in_playlist"
 		}
-		with YoutubeDL(ydl_opts) as ydl:
-			self.__found_emitter(ydl.extract_info(playlist_url, download=False))  # Только извлекает информацию
-
-	def __get_video_metadata(self, video_url):
-		ydl_opts = {
-			"quiet": False,			# Включает логирование
-			"logger": yt_dlp_log
-		}
-		with YoutubeDL(ydl_opts) as ydl:
-			self.__found_emitter(ydl.extract_info(video_url, download=False))  # Только извлекает информацию
+		try:
+			with YoutubeDL(ydl_opts) as ydl:
+				self.__found_emitter(True, ydl.extract_info(url, download=False))  # Только извлекает информацию
+		except Exception as err:
+			log.error(err)
+			self.__found_emitter(False, {"original_url": url})
 
 	def __download_video_wrapper(self, video_url, video_title, video_format, audio_quality):
 		self.__start_download_emitter()
@@ -286,7 +288,7 @@ class Loader(QObject):
 
 	def __download_video(self, video_url, video_title, video_format, audio_quality):
 		ydl_opts = {
-			"format": f"{video_format}+ba[ext=m4a][tbr<={audio_quality}]",
+			"format": f"{video_format}+ba[ext=m4a][abr<={audio_quality}]" if audio_quality else f"{video_format}",
 			"quiet": False,
 			"outtmpl": video_title,
 			"progress_hooks": [self.__update_emitter],
@@ -297,7 +299,7 @@ class Loader(QObject):
 
 	def __download_audio(self, video_url, video_title, audio_quality):
 		ydl_opts = {
-			"format": f"ba[ext=m4a][tbr<={audio_quality}]",
+			"format": f"ba[ext=m4a][abr<={audio_quality}]" if audio_quality else "ba",
 			"quiet": False,
 			"outtmpl": video_title,
 			"progress_hooks": [self.__update_emitter],
@@ -331,14 +333,18 @@ class Loader(QObject):
 		except CalledProcessError as err:
 			log.error(f"[✗] ERROR: File {filename} could not be converted {err}")
 
-	def __found_emitter(self, data):
-		self.founded.emit(data)
-		log.info(f"Data found... Video title is {data['title']}")
+	def __found_emitter(self, check, data):
+		self.founded.emit(check, data)
+		log.info(f"Data found... Video title is '{data['title']}'") if check else log.error("Data not found")
 
 	def __update_emitter(self, updated_data):
-		if updated_data['status'] == 'downloading':
-			self.updated.emit(updated_data['total_bytes'], updated_data['downloaded_bytes'])
-			log.info(updated_data['_default_template'])
+		try:
+			if updated_data['status'] == 'downloading':
+				self.updated.emit(updated_data['total_bytes'], updated_data['downloaded_bytes'])
+				log.info(updated_data['_default_template'])
+		except Exception as err:
+			self.updated.emit(0, 0)
+			log.error(err)
 
 	def __extract_emitter(self, message=""):
 		self.extracted.emit()
@@ -392,9 +398,9 @@ class SettingsWidget(QWidget):
 		self.choose_download_folder_butt = QPushButton("Choose download folder")
 		self.choose_ffmpeg_folder_butt = QPushButton("Choose FFmpeg exe")
 		self.extra_download_group_box = QGroupBox("Extra-mode")
-		self.extra_download_video_check_box = QCheckBox("Run extra download video")
-		self.extra_download_audio_check_box = QCheckBox("Run extra download audio")
-		self.extra_download_va_check_box = QCheckBox("Run extra download video and audio")
+		self.extra_download_video_check_box = QCheckBox("Run extra download MP4")
+		self.extra_download_audio_check_box = QCheckBox("Run extra download MP3")
+		self.extra_download_va_check_box = QCheckBox("Run extra download MP4+MP3")
 		self.other_data_display_group_box = QGroupBox("Other video data settings")
 		self.date_format_label = QLabel("Choose the data format:")
 		self.date_format_combo_box = QComboBox()
@@ -745,7 +751,7 @@ class DownloadButtWidget(QWidget):
 	def __init__(self):
 		super(DownloadButtWidget, self).__init__()
 
-		self.download_metadata_butt = QPushButton("Save metadata (JSON)")
+		self.download_metadata_butt = QPushButton("Save metadata (YAML)")
 		self.download_video_butt = QPushButton("Download MP4")
 		self.download_audio_butt = QPushButton("Download MP3")
 		self.download_all_butt = QPushButton("Download MP4+MP3")
@@ -829,10 +835,9 @@ class TitleBarWidget(QWidget):
 		# Initialization of Tray
 
 		self.show_action = QAction("Show", self)
-		# self.show_action.setIcon(QIcon("./icon/open.png"))
-		self.show_action.triggered.connect(self.show_action_triggered)
 		self.exit_action = QAction("Exit", self)
-		# self.exit_action.setIcon(QIcon("./icon/fork.png"))
+
+		self.show_action.triggered.connect(self.show_action_triggered)
 		self.exit_action.triggered.connect(self.exit_action_triggered)
 
 		self.tray_menu = QMenu()
@@ -864,13 +869,14 @@ class TitleBarWidget(QWidget):
 			}
 		""")
 		self.roll_butt.setFixedSize(40, 30)
-		self.roll_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
-		self.roll_butt.clicked.connect(self.roll_butt_clicked)
 		self.tray_butt.setFixedSize(40, 30)
-		self.tray_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
-		self.tray_butt.clicked.connect(self.tray_butt_clicked)
 		self.exit_butt.setFixedSize(40, 30)
+		self.roll_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
+		self.tray_butt.setStyleSheet(custom_but_qss_preparing([255, 149, 0]))
 		self.exit_butt.setStyleSheet(custom_but_qss_preparing([255, 59, 48]))
+
+		self.roll_butt.clicked.connect(self.roll_butt_clicked)
+		self.tray_butt.clicked.connect(self.tray_butt_clicked)
 		self.exit_butt.clicked.connect(self.exit_butt_clicked)
 
 		# Перенаправление событий мыши с вложенного виджета в заголовок
@@ -955,6 +961,8 @@ class NYTDialogWindow(QMainWindow):
 		self.settings_widget.advanced_naming_resolution_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming resolution"])
 		self.settings_widget.advanced_naming_playlist_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming playlist"])
 		self.settings_widget.advanced_naming_playlist_index_check_box.setChecked(program_data.settings["advanced naming"]["advanced naming playlist index"])
+
+		self.settings_widget.accent_color_signal.connect(self.settings_widget_accent_color_signal)
 
 		if program_data.settings["folders"]["download folder"]:
 			self.settings_widget.download_folder_label.setText(program_data.settings["folders"]["download folder"])
@@ -1052,13 +1060,13 @@ class NYTDialogWindow(QMainWindow):
 		self.setCentralWidget(self.central_widget)
 		self.setStatusBar(self.status_bar)
 
-		self.__init_about_screen()
-		self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
-
 		self.settings_widget.title_bar_combo_box.setCurrentIndex(program_data.settings["theme"]["title bar"])
 		self.settings_widget.appearance_combo_box.setCurrentIndex(program_data.settings["theme"]["theme"])
 		self.title_bar_combo_box_current_text_changed(self.settings_widget.title_bar_combo_box.currentText())
 		setup_theme(theme=self.settings_widget.appearance_combo_box.currentText().lower(), custom_colors={"primary": program_data.settings["theme"]["accent color"]})
+
+		self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
+		self.__init_about_screen()
 
 		log.debug("Interface was initialized")
 
@@ -1076,65 +1084,74 @@ class NYTDialogWindow(QMainWindow):
 		log.debug("Initialization finished")
 		log.info("The program has been launched")
 
-	def loader_founded(self, metadata: dict):
-		self.download_progress_bars_widget.unit_progress_bar.setRange(0, 100)
-		if not metadata["id"] in program_data.cache.keys():
+	def loader_founded(self, check: bool, metadata: dict):
+		if not metadata["original_url"] in program_data.cache.keys():
 			metadata = convert_http_header_to_dict(metadata)
-			program_data.cache[metadata["id"]] = metadata
+			program_data.cache[metadata["original_url"]] = {
+				"validity": check,
+				"metadata": metadata
+			}
 
-		if "_type" in metadata and metadata["_type"] == "playlist":
-			log.debug("Playlist metadata was intercepted")
-			self.playlist_metadata = {"video": [entry['id'] for entry in metadata['entries']], "counter": 0}
-			self.download_progress_bars_widget.total_progress_bar.setMaximum(len(self.playlist_metadata["video"]))
-			self.download_progress_bars_widget.total_progress_bar.setValue(0)
-			self.download_progress_bars_widget.unit_progress_bar.setValue(0)
-			self.video_searcher_widget.url_line_edit.setText(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
-			self.download_butt_widget.finish_butt.setEnabled(True)
-			self.find_video_butt_clicked()
-		else:
-			log.debug("Video metadata was intercepted")
-			self.video_metadata = deepcopy(metadata)
+		if check and self.__analyze_link():
+			self.download_progress_bars_widget.unit_progress_bar.setRange(0, 100)
 
-			resolutions = sorted(
-				set(
-					fmt["format_note"] for fmt in self.video_metadata["formats"]
-					if "format_note" in fmt
-						and fmt["format_note"].endswith("p")
-						and fmt["format_note"][:-1].isdigit()
-						and fmt["ext"] == "mp4"
-				),
-				key=lambda r: int(r.replace("p", "")),
-				reverse=True
-			)
-			self.settings_widget.video_quality_combo_box.clear()
-			self.settings_widget.video_quality_combo_box.addItems(resolutions)
-			self.settings_widget.video_quality_combo_box.setCurrentText(resolutions[0] if int(resolutions[0].replace("p", "")) <= self.standard_quality else f"{self.standard_quality}p")
-
-			audio_quality = sorted(
-				set(
-					f"{fmt['tbr']} kbps" for fmt in self.video_metadata["formats"]
-					if "tbr" in fmt and fmt["ext"] == "m4a"
-				),
-				key=lambda r: float(r.replace(" kbps", "")),
-				reverse=True
-			)
-			log.debug(audio_quality)
-			self.settings_widget.audio_quality_combo_box.clear()
-			self.settings_widget.audio_quality_combo_box.addItems(audio_quality)
-
-			self.__insert_video_metadata()
-			self.__change_download_butt_enabling(True)
-
-			if not self.video_metadata_widget.video_data_tab_widget.isTabVisible(1):
-				self.video_metadata_widget.video_data_tab_widget.setTabVisible(1, True)
-			if self.settings_widget.extra_download_video_check_box.isChecked():
-				self.download_video_butt_clicked()
-			elif self.settings_widget.extra_download_audio_check_box.isChecked():
-				self.download_audio_butt_clicked()
-			elif self.settings_widget.extra_download_va_check_box.isChecked():
-				self.download_all_butt_clicked()
+			if "_type" in metadata and metadata["_type"] == "playlist":
+				log.debug("Playlist metadata was intercepted")
+				self.playlist_metadata = {"video": [entry['url'] for entry in metadata['entries']], "counter": 0}
+				self.download_progress_bars_widget.total_progress_bar.setMaximum(len(self.playlist_metadata["video"]))
+				self.download_progress_bars_widget.total_progress_bar.setValue(0)
+				self.download_progress_bars_widget.unit_progress_bar.setValue(0)
+				self.video_searcher_widget.url_line_edit.setText(self.playlist_metadata["video"][self.playlist_metadata["counter"]])
+				self.download_butt_widget.finish_butt.setEnabled(True)
+				self.find_video_butt_clicked()
 			else:
-				self.download_butt_widget.setEnabled(True)
+				log.debug("Video metadata was intercepted")
+				self.video_metadata = deepcopy(metadata)
+
+				resolutions = sorted(
+					set(
+						f"{fmt['height']}p" for fmt in self.video_metadata["formats"]
+						if "height" in fmt and fmt["ext"] == "mp4"
+					),
+					key=lambda r: int(r.replace("p", "")),
+					reverse=True
+				)
+				self.settings_widget.video_quality_combo_box.clear()
+				self.settings_widget.video_quality_combo_box.addItems(resolutions)
+
+				audio_quality = sorted(
+					set(
+						f"{fmt['abr']} kbps" for fmt in self.video_metadata["formats"]
+						if "abr" in fmt and fmt["ext"] == "m4a"
+					),
+					key=lambda r: float(r.replace(" kbps", "")),
+					reverse=True
+				)
+				log.debug(audio_quality)
+				self.settings_widget.audio_quality_combo_box.clear()
+				self.settings_widget.audio_quality_combo_box.addItems(audio_quality)
+
+				try:
+					self.settings_widget.video_quality_combo_box.setCurrentText(resolutions[0] if int(resolutions[0].replace("p", "")) <= self.standard_quality else f"{self.standard_quality}p")
+				except Exception as err:
+					log.debug(f"It was not possible to set the video quality: {err}")
+
+				self.__insert_video_metadata()
+				self.__change_download_butt_enabling(True)
+
+				if not self.video_metadata_widget.video_data_tab_widget.isTabVisible(1):
+					self.video_metadata_widget.video_data_tab_widget.setTabVisible(1, True)
+				if self.settings_widget.extra_download_video_check_box.isChecked():
+					self.download_video_butt_clicked()
+				elif self.settings_widget.extra_download_audio_check_box.isChecked():
+					self.download_audio_butt_clicked()
+				elif self.settings_widget.extra_download_va_check_box.isChecked():
+					self.download_all_butt_clicked()
+				else:
+					self.download_butt_widget.setEnabled(True)
+
+		else:
+			self.finish_butt_clicked() if self.playlist_flag else self.skip_butt_clicked()
 
 	def loader_updated(self, max_percent, current_percent):
 		self.download_progress_bars_widget.unit_progress_bar.setMaximum(max_percent)
@@ -1147,7 +1164,8 @@ class NYTDialogWindow(QMainWindow):
 		self.download_butt_widget.setEnabled(False)
 
 	def loader_finish_download(self):
-		self.video_searcher_widget.setVisible(True)
+		if not self.video_searcher_widget.isVisible():
+			self.video_searcher_widget.setVisible(True)
 
 		def clear_window():
 			self.__set_title_bar_name("© 2024 Kalynovsky Valentin")
@@ -1160,6 +1178,8 @@ class NYTDialogWindow(QMainWindow):
 			self.settings_widget.audio_quality_combo_box.addItem("unknown")
 			self.video_metadata_widget.video_data_tab_widget.setTabVisible(1, False)
 			self.video_searcher_widget.url_line_edit.clear()
+			self.download_progress_bars_widget.total_progress_bar.reset()
+			self.download_progress_bars_widget.unit_progress_bar.reset()
 			self.__init_about_screen()
 
 		if self.playlist_flag:
@@ -1175,9 +1195,13 @@ class NYTDialogWindow(QMainWindow):
 		else:
 			clear_window()
 
+	def settings_widget_accent_color_signal(self, color):
+		self.video_metadata_widget.description_label.setHtml(description)
+		log.debug(color)
+
 	def title_bar_combo_box_current_text_changed(self, new_text):
 		if new_text == "Custom title bar":
-			self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+			self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 			# self.central_widget.setStyleSheet("border: 1px solid #ccc; border-radius: 15px;")  # Funny Easter egg
 			self.title_bar.setVisible(True)
 		else:
@@ -1193,29 +1217,27 @@ class NYTDialogWindow(QMainWindow):
 	def find_video_butt_clicked(self):
 		self.download_progress_bars_widget.unit_progress_bar.setRange(0, 0)
 		self.download_progress_bars_widget.unit_progress_bar.setValue(0)
-		if self.__analyze_link():
-			if self.video_searcher_widget.url_line_edit.text() in program_data.cache.keys():
+
+		if self.video_searcher_widget.url_line_edit.text() in program_data.cache.keys():
+			if program_data.cache[self.video_searcher_widget.url_line_edit.text()]["validity"]:
 				log.debug("Loaded cached data")
-				self.loader_founded(program_data.cache[self.video_searcher_widget.url_line_edit.text()])
+				self.loader_founded(True, program_data.cache[self.video_searcher_widget.url_line_edit.text()]["metadata"])
 			else:
-				if self.playlist_flag:
-					log.debug(self.video_searcher_widget.url_line_edit.text())
-					self.loader.submit_find_playlist(
-						self.video_searcher_widget.url_line_edit.text()
-					)
-				else:
-					log.debug(self.video_searcher_widget.url_line_edit.text())
-					self.loader.submit_find_video(
-						self.video_searcher_widget.url_line_edit.text()
-					)
+				log.error("URL not supported by YT-DLP")
+				self.download_progress_bars_widget.unit_progress_bar.setRange(0, 100)
+				self.skip_butt_clicked()
+		else:
+			self.loader.submit_find_metadata(
+				self.video_searcher_widget.url_line_edit.text()
+			)
 
 	def title_label_text_changed(self):
 		self.__set_title_bar_name(self.video_metadata_widget.title_label.text())
 
 	def download_metadata_butt_clicked(self):
-		with open(f"{self.video_metadata_widget.title_label.text()}.json", "w", encoding="utf-8") as json_file:
-			json.dump(self.video_metadata, json_file, indent=4)
-			log.debug(f"Video metadata saved to '{self.video_metadata_widget.title_label.text()}.json'")
+		with open(f"{self.video_metadata_widget.title_label.text()}.yaml", "w", encoding="utf-8") as json_file:
+			yaml.dump(self.video_metadata, json_file, indent=4)
+			log.debug(f"Video metadata saved to '{self.video_metadata_widget.title_label.text()}.yaml'")
 
 	def download_video_butt_clicked(self):
 		self.__change_download_butt_enabling(False)
@@ -1223,9 +1245,9 @@ class NYTDialogWindow(QMainWindow):
 		formatted_name = self.__file_name_preparing()
 		log.debug(f"Starting saved file '{formatted_name}'")
 		self.loader.submit_download_video(
-			self.video_metadata["id"],
+			self.video_metadata["original_url"],
 			formatted_name,
-			[fmt["format_id"] for fmt in self.video_metadata["formats"] if fmt.get("format_note") == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0],
+			[fmt["format_id"] for fmt in self.video_metadata["formats"] if f"{fmt.get('height')}p" == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0],
 			self.settings_widget.audio_quality_combo_box.currentText().replace(" kbps", "")
 		)
 
@@ -1233,9 +1255,9 @@ class NYTDialogWindow(QMainWindow):
 		self.__change_download_butt_enabling(False)
 		self.video_searcher_widget.setVisible(False)
 		formatted_name = self.__file_name_preparing()
-		log.debug(f"Starting saved audio file '{formatted_name}'")
+		log.debug(f"Starting saved file '{formatted_name}'")
 		self.loader.submit_download_audio(
-			self.video_metadata["id"],
+			self.video_metadata["original_url"],
 			formatted_name,
 			self.settings_widget.audio_quality_combo_box.currentText().replace(" kbps", "")
 		)
@@ -1244,17 +1266,17 @@ class NYTDialogWindow(QMainWindow):
 		self.__change_download_butt_enabling(False)
 		self.video_searcher_widget.setVisible(False)
 		formatted_name = self.__file_name_preparing()
-		log.debug(f"Starting saved video and audio file '{formatted_name}'")
+		log.debug(f"Starting saved file '{formatted_name}'")
 		self.loader.submit_download_va(
-			self.video_metadata["id"],
+			self.video_metadata["original_url"],
 			formatted_name,
-			[fmt["format_id"] for fmt in self.video_metadata["formats"] if fmt.get("format_note") == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0],
+			[fmt["format_id"] for fmt in self.video_metadata["formats"] if f"{fmt.get('height')}p" == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0],
 			self.settings_widget.audio_quality_combo_box.currentText().replace(" kbps", "")
 		)
 
 	def skip_butt_clicked(self):
-		self.loader_start_download()
-		self.loader_updated(1, 1)
+		# self.loader_start_download()
+		# self.loader_updated(1, 1)
 		self.loader_finish_download()
 
 	def finish_butt_clicked(self):
@@ -1352,12 +1374,12 @@ class NYTDialogWindow(QMainWindow):
 			if "www.youtube.com" in self.video_searcher_widget.url_line_edit.text():
 
 				if self.video_searcher_widget.url_line_edit.text().split("?")[0].split("/")[-1] == "playlist":
-					self.video_searcher_widget.url_line_edit.setText(self.video_searcher_widget.url_line_edit.text().split("?")[1].split("&")[0].split("=")[1])
+					log.debug("Entered the youtube playlist link")
 					self.playlist_flag = True
 					return True
 
 				elif self.video_searcher_widget.url_line_edit.text().split("?")[0].split("/")[-1] == "watch":
-					self.video_searcher_widget.url_line_edit.setText(self.video_searcher_widget.url_line_edit.text().split("?")[1].split("&")[0].split("=")[1])
+					log.debug("Entered the youtube video link")
 					return True
 
 				else:
@@ -1365,11 +1387,11 @@ class NYTDialogWindow(QMainWindow):
 					return False
 
 			else:
-				log.error("Entered the unknown link")
-				return False
+				log.warning("The program has been given a link to a secondary supported resource")
+				return True
 
 		else:
-			log.info("Entered video/playlist ID")
+			log.info("Entered youtube video/playlist ID")
 			if len(self.video_searcher_widget.url_line_edit.text()) > 20:
 				self.playlist_flag = True
 			return True
@@ -1425,11 +1447,15 @@ class NYTDialogWindow(QMainWindow):
 
 		self.video_metadata_widget.title_label.setText(self.video_metadata['title'])
 		self.video_metadata_widget.description_label.setPlainText(self.video_metadata['description'])
-		self.video_metadata_widget.duration_string_label.setText(self.video_metadata['duration_string'])
-		self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][self.settings_widget.date_format_combo_box.currentText()])
-		self.video_metadata_widget.view_count_label.setText(str(self.video_metadata['view_count']))
-		self.video_metadata_widget.like_count_label.setText(str(self.video_metadata['like_count']))
-		self.video_metadata_widget.uploader_label.setText(f"<a href='{self.video_metadata['channel_url']}'>{self.video_metadata['uploader']}</a> ({self.video_metadata['channel_follower_count']} subscribes)")
+
+		try:
+			self.video_metadata_widget.duration_string_label.setText(self.video_metadata['duration_string'])
+			self.video_metadata_widget.upload_date_label.setText(self.video_metadata['upload_date'][self.settings_widget.date_format_combo_box.currentText()])
+			self.video_metadata_widget.view_count_label.setText(str(self.video_metadata['view_count']))
+			self.video_metadata_widget.like_count_label.setText(str(self.video_metadata['like_count']))
+			self.video_metadata_widget.uploader_label.setText(f"<a href='{self.video_metadata['channel_url']}'>{self.video_metadata['uploader']}</a> ({self.video_metadata['channel_follower_count']} subscribes)")
+		except KeyError as err:
+			log.error(f"It was not possible to obtain all the data: {err}")
 
 		log.debug("Video metadata was setted")
 
