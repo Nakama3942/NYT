@@ -1133,12 +1133,21 @@ class NYTDialogWindow(QMainWindow):
 
 				resolutions = sorted(
 					set(
-						f"{fmt['height']}p" for fmt in self.video_metadata["formats"]
-						if "height" in fmt and fmt["ext"] == "mp4"
+						fmt["format_note"] for fmt in self.video_metadata["formats"]
+						if "format_note" in fmt and fmt["format_note"].endswith("p") and fmt["ext"] == "mp4"
 					),
 					key=lambda r: int(r.replace("p", "")),
 					reverse=True
 				)
+				if not resolutions:
+					resolutions = sorted(
+						set(
+							f"{fmt['height']}p" for fmt in self.video_metadata["formats"]
+							if "height" in fmt and fmt["ext"] == "mp4"
+						),
+						key=lambda r: int(r.replace("p", "")),
+						reverse=True
+					)
 				self.settings_widget.video_quality_combo_box.clear()
 				self.settings_widget.video_quality_combo_box.addItems(resolutions)
 
@@ -1155,7 +1164,7 @@ class NYTDialogWindow(QMainWindow):
 				self.settings_widget.audio_quality_combo_box.addItems(audio_quality)
 
 				try:
-					self.settings_widget.video_quality_combo_box.setCurrentText(resolutions[0] if int(resolutions[0].replace("p", "")) <= self.standard_quality else f"{self.standard_quality}p")
+					self.settings_widget.video_quality_combo_box.setCurrentText(max(resolutions, key=lambda res: int(res.replace("p", "")) <= self.standard_quality))
 				except Exception as err:
 					log.debug(f"It was not possible to set the video quality: {err}")
 
@@ -1267,10 +1276,16 @@ class NYTDialogWindow(QMainWindow):
 		self.video_searcher_widget.setVisible(False)
 		formatted_name = self.__file_name_preparing()
 		log.debug(f"Starting saved file '{formatted_name}'")
+		try:
+			video_format = [fmt["format_id"] for fmt in self.video_metadata["formats"] if fmt.get("format_note") == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0]
+		except IndexError as err:
+			video_format = [fmt["format_id"] for fmt in self.video_metadata["formats"] if f"{fmt.get('height')}p" == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0]
+			log.debug(err)
+
 		self.loader.submit_download_video(
 			self.video_metadata["original_url"],
 			formatted_name,
-			[fmt["format_id"] for fmt in self.video_metadata["formats"] if f"{fmt.get('height')}p" == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0],
+			video_format,
 			self.settings_widget.audio_quality_combo_box.currentText().replace(" kbps", "")
 		)
 
@@ -1290,10 +1305,16 @@ class NYTDialogWindow(QMainWindow):
 		self.video_searcher_widget.setVisible(False)
 		formatted_name = self.__file_name_preparing()
 		log.debug(f"Starting saved file '{formatted_name}'")
+		try:
+			video_format = [fmt["format_id"] for fmt in self.video_metadata["formats"] if fmt.get("format_note") == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0]
+		except IndexError as err:
+			video_format = [fmt["format_id"] for fmt in self.video_metadata["formats"] if f"{fmt.get('height')}p" == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0]
+			log.debug(err)
+
 		self.loader.submit_download_va(
 			self.video_metadata["original_url"],
 			formatted_name,
-			[fmt["format_id"] for fmt in self.video_metadata["formats"] if f"{fmt.get('height')}p" == self.settings_widget.video_quality_combo_box.currentText() and fmt.get("ext") == "mp4"][0],
+			video_format,
 			self.settings_widget.audio_quality_combo_box.currentText().replace(" kbps", "")
 		)
 
